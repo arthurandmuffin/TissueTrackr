@@ -1,17 +1,26 @@
+import argparse
 import asyncio
 import cv2
 import websockets
 
 WS_URL = "ws://127.0.0.1:8000/ws/incoming-stream"
-VIDEO_PATH = "/Users/arthurhuang/Downloads/Dataset/Echo/echo1.mp4"
 JPEG_QUALITY = 80
 FPS_LIMIT = 20  # set None to send as fast as possible
 
 async def main():
-    cap = cv2.VideoCapture(VIDEO_PATH)
-    if not cap.isOpened():
-        raise RuntimeError(f"Could not open video: {VIDEO_PATH}")
+    parser = argparse.ArgumentParser(
+        description="WebSocket client for TissueTrackr streaming endpoints."
+    )
+    parser.add_argument(
+        "--video",
+        required=True,
+        help="Path to the video file to stream to /ws/incoming-stream.",
+    )
+    args = parser.parse_args()
 
+    cap = cv2.VideoCapture(args.video)
+    if not cap.isOpened():
+        raise RuntimeError(f"Could not open video: {args.video}")
     delay = (1 / FPS_LIMIT) if FPS_LIMIT else 0
 
     async with websockets.connect(WS_URL, origin="http://127.0.0.1:8000", max_size=50 * 1024 * 1024) as ws:
