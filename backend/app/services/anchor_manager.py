@@ -47,6 +47,7 @@ class AnnotationState:
     record: AnnotationRecord
     local_state: Optional[LocalAnchorState]
     global_state: Optional[GlobalAnchorState]
+    map_keyframe_transform: Optional[np.ndarray] = None
 
 
 @dataclass
@@ -166,6 +167,11 @@ class AnchorManager:
                     state.record.global_transform = self._update_global_anchor(
                         state.global_state, positions
                     )
+                if (
+                    state.record.local_transform is None
+                    and state.record.global_transform is None
+                ):
+                    state.record.global_transform = self._update_map_anchor(state)
                 state.record.updated_at = self._now()
 
         self.prev_gray = gray
@@ -406,8 +412,15 @@ class AnchorManager:
             record.local_anchor = local_anchor
             record.global_anchor = global_anchor
 
+            map_keyframe_transform = None
+            if self.last_map_transform is not None:
+                map_keyframe_transform = self.last_map_transform.copy()
+
             self.annotations[record.id] = AnnotationState(
-                record=record, local_state=local_state, global_state=global_state
+                record=record,
+                local_state=local_state,
+                global_state=global_state,
+                map_keyframe_transform=map_keyframe_transform,
             )
             created.append(record)
         return created
@@ -522,9 +535,13 @@ class AnchorManager:
 
         mask = status.reshape(-1) == 1
         if mask.sum() < 4:
-            state.last_points = state.last_points[mask]
+            state.last_points = new_points[mask]
             state.keyframe_points = state.keyframe_points[mask]
-            return None
+            if mask.sum() == 0:
+                return None
+            return self._translation_transform(
+                state.keyframe_points, state.last_points
+            )
 
         state.last_points = new_points[mask]
         state.keyframe_points = state.keyframe_points[mask]
@@ -547,12 +564,65 @@ class AnchorManager:
             dst_points.append(positions[lm_id])
 
         if len(src_points) < 4:
-            return None
+            if len(src_points) == 0:
+                return None
+            return self._translation_transform(
+                np.array(src_points, dtype=np.float32),
+                np.array(dst_points, dtype=np.float32),
+            )
 
         return self._estimate_transform(
             np.array(src_points, dtype=np.float32),
             np.array(dst_points, dtype=np.float32),
             state.transform_type,
+        )
+
+    def _update_map_anchor(
+        self, state: AnnotationState
+    ) -> Optional[TransformMatrix]:
+        if state.map_keyframe_transform is None or self.last_map_transform is None:
+            return None
+        inv_current = self._invert_affine(self.last_map_transform)
+        if inv_current is None:
+            return None
+        composed = self._compose_affine(inv_current, state.map_keyframe_transform)
+        if composed is None:
+            return None
+        return TransformMatrix(matrix=composed.tolist())
+
+    def _invert_affine(self, matrix: np.ndarray) -> Optional[np.ndarray]:
+        if matrix.shape != (2, 3):
+            return None
+        affine = np.vstack([matrix, [0.0, 0.0, 1.0]])
+        try:
+            inv = np.linalg.inv(affine)
+        except np.linalg.LinAlgError:
+            return None
+        return inv[:2, :]
+
+    def _compose_affine(
+        self, left: np.ndarray, right: np.ndarray
+    ) -> Optional[np.ndarray]:
+        if left.shape != (2, 3) or right.shape != (2, 3):
+            return None
+        left_3 = np.vstack([left, [0.0, 0.0, 1.0]])
+        right_3 = np.vstack([right, [0.0, 0.0, 1.0]])
+        composed = left_3 @ right_3
+        return composed[:2, :]
+
+    def _translation_transform(
+        self, src_points: np.ndarray, dst_points: np.ndarray
+    ) -> Optional[TransformMatrix]:
+        src = src_points.reshape(-1, 2)
+        dst = dst_points.reshape(-1, 2)
+        if src.size == 0 or dst.size == 0:
+            return None
+        delta = dst - src
+        dx = float(delta[:, 0].mean())
+        dy = float(delta[:, 1].mean())
+        return TransformMatrix(
+            matrix=[[1.0, 0.0, dx], [0.0, 1.0, dy]],
+            inliers=int(src.shape[0]),
         )
 
     def _estimate_transform(

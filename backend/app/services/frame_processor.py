@@ -152,7 +152,7 @@ class FrameProcessor:
             if not points:
                 continue
 
-            transform = annotation.local_transform or annotation.global_transform
+            transform = annotation.global_transform or annotation.local_transform
             coords = self._apply_transform(points, transform)
             if coords.size == 0:
                 continue
