@@ -283,3 +283,15 @@ async def receive_annotations(payload: AnnotationsIn):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error receiving annotations: {str(e)}")
+
+
+@app.delete("/annotations")
+async def clear_annotations():
+    """
+    Remove all stored annotations from the backend.
+    """
+    try:
+        count = anchor_manager.clear_annotations()
+        return JSONResponse({"success": True, "count": count})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error clearing annotations: {str(e)}")

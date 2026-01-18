@@ -12,6 +12,7 @@ export default function App() {
   const [mode, setMode] = useState("draw");
   const [eraserSize, setEraserSize] = useState(18);
   const [strokes, setStrokes] = useState([]);
+  const [savedStrokes, setSavedStrokes] = useState([]);
   const [status, setStatus] = useState("idle");
   const [isPlaying, setIsPlaying] = useState(false);
   const [hasPending, setHasPending] = useState(false);
@@ -79,6 +80,7 @@ export default function App() {
     setLandmarks([]);
     setFrameSrc("");
     setStrokes([]);
+    setSavedStrokes([]);
     setHasPending(false);
     setIsPlaying(false);
     isPlayingRef.current = false;
@@ -149,6 +151,7 @@ export default function App() {
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     const allStrokes = [
+      ...savedStrokes,
       ...strokes,
       currentStrokeRef.current.length
         ? { points: currentStrokeRef.current, color: currentStrokeColorRef.current }
@@ -261,6 +264,9 @@ export default function App() {
     isPlayingRef.current = next;
     setIsPlaying(next);
     setLastPlaybackAction(next ? "play" : "pause");
+    if (next) {
+      setSavedStrokes([]);
+    }
     showPlaybackOverlay();
   };
 
@@ -279,11 +285,19 @@ export default function App() {
     setHasPending(false);
   };
 
-  const eraseAll = () => {
-    setStrokes([]);
-    currentStrokeRef.current = [];
-    drawingRef.current = false;
-    setHasPending(false);
+  const deleteAll = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/annotations`, { method: "DELETE" });
+      if (!res.ok) throw new Error(await res.text());
+      await res.json();
+      setStrokes([]);
+      setSavedStrokes([]);
+      currentStrokeRef.current = [];
+      drawingRef.current = false;
+      setHasPending(false);
+    } catch (err) {
+      alert(`Failed to clear annotations: ${err.message}`);
+    }
   };
 
   const eraseAtPoint = (point) => {
@@ -375,12 +389,13 @@ export default function App() {
       });
       if (!res.ok) throw new Error(await res.text());
       await res.json();
+      setSavedStrokes(isPlayingRef.current ? [] : strokes);
       setStrokes([]);
       setHasPending(false);
       drawingRef.current = false;
       currentStrokeRef.current = [];
       currentStrokeColorRef.current = color;
-      alert("Annotation sent");
+      alert("Annotation saved");
     } catch (err) {
       alert(`Failed to send annotation: ${err.message}`);
     } finally {
@@ -447,8 +462,8 @@ export default function App() {
               >
                 Erase
               </button>
-              <button type="button" className="ghost" onClick={eraseAll}>
-                Erase all
+              <button type="button" className="ghost" onClick={deleteAll}>
+                Delete All
               </button>
             </div>
             {mode === "erase" && (

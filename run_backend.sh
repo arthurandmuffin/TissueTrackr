@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-VIDEO_PATH="videos/Lapchole/Lapchole2.mp4"
+VIDEO_PATH="videos/Lapchole/Lapchole1.mp4"
 VIDEO_FPS="15"
 
 if [[ -z "$VIDEO_PATH" ]]; then
