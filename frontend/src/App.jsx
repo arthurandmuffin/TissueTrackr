@@ -4,6 +4,13 @@ const WS_BASE = import.meta.env.VITE_WS_BASE || "ws://localhost:8000";
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
 export default function App() {
+  const trackingPresets = {
+    "echo-cardio": { detector: "sift" },
+    lap: { detector: "sift" },
+    ultra: { detector: "sift" },
+    pocus: { detector: "sift" },
+  };
+
   const [frameSrc, setFrameSrc] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [frameId, setFrameId] = useState(null);
@@ -20,6 +27,7 @@ export default function App() {
   const [showPlaybackHint, setShowPlaybackHint] = useState(false);
   const [lastPlaybackAction, setLastPlaybackAction] = useState("pause");
   const [toast, setToast] = useState(null);
+  const [trackingPreset, setTrackingPreset] = useState("");
   const [trackingConfig, setTrackingConfig] = useState({
     detector: "sift",
     transform_priority: "local_first",
@@ -346,6 +354,19 @@ export default function App() {
     updateTrackingConfig({ [field]: value });
   };
 
+  const handlePresetChange = (value) => {
+    setTrackingPreset(value);
+    if (!value) return;
+    if (value === "custom") return;
+    const patch = trackingPresets[value] || {};
+    if (!Object.keys(patch).length) return;
+    setTrackingConfig((prev) => ({
+      ...prev,
+      ...patch,
+    }));
+    updateTrackingConfig(patch);
+  };
+
   const pinCurrentFrame = async () => {
     if (!frameId || pinnedFrameIdRef.current === frameId) return;
     try {
@@ -557,9 +578,10 @@ export default function App() {
             <h2>Tracking Preset</h2>
             <label className="label">Video Type</label>
             <select
-              value={trackingConfig.detector}
-              onChange={(e) => handleTrackingChange("detector", e.target.value)}
+              value={trackingPreset}
+              onChange={(e) => handlePresetChange(e.target.value)}
             >
+              <option value="">Select video type</option>
               <option value="echo-cardio">Echo Cardio</option>
               <option value="lap">Laparoscopy</option>
               <option value="ultra">Intrapartum</option>
