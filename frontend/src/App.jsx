@@ -19,6 +19,7 @@ export default function App() {
   const [isSending, setIsSending] = useState(false);
   const [showPlaybackHint, setShowPlaybackHint] = useState(false);
   const [lastPlaybackAction, setLastPlaybackAction] = useState("pause");
+  const [toast, setToast] = useState(null);
   const [trackingConfig, setTrackingConfig] = useState({
     detector: "akaze",
     transform_priority: "global_first",
@@ -36,6 +37,7 @@ export default function App() {
   const hintTimerRef = useRef(null);
   const isPlayingRef = useRef(false);
   const pinnedFrameIdRef = useRef(null);
+  const toastTimerRef = useRef(null);
 
   useEffect(() => {
     resizeOverlay();
@@ -73,6 +75,24 @@ export default function App() {
       disconnectSockets();
     };
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+      }
+    };
+  }, []);
+
+  const showToast = (message, variant = "success") => {
+    setToast({ message, variant });
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+    }
+    toastTimerRef.current = setTimeout(() => {
+      setToast(null);
+    }, 2600);
+  };
 
   const connectSockets = () => {
     disconnectSockets();
@@ -284,7 +304,7 @@ export default function App() {
   const togglePlay = () => {
     if (!streaming) return;
     if (hasPending) {
-      alert("Send or cancel the current annotation before playing.");
+      setToast("Send or cancel the current annotation before playing.", "error");
       return;
     }
     const next = !isPlayingRef.current;
@@ -314,7 +334,7 @@ export default function App() {
         ...data,
       }));
     } catch (err) {
-      alert(`Failed to update tracking config: ${err.message}`);
+      setToast(`Failed to update tracking config: ${err.message}`, "error");
     }
   };
 
@@ -384,7 +404,7 @@ export default function App() {
       drawingRef.current = false;
       setHasPending(false);
     } catch (err) {
-      alert(`Failed to clear annotations: ${err.message}`);
+      setToast(`Failed to clear annotations: ${err.message}`, "error");
     }
   };
 
@@ -455,9 +475,9 @@ export default function App() {
   };
 
   const sendAnnotation = async () => {
-    if (!frameId) return alert("No frame id yet. Start streaming first.");
+    if (!frameId) return setToast("No frame id yet. Start streaming first.", "error");
     if (!strokes.length) {
-      return alert("Draw at least one stroke.");
+      return setToast("Draw at least one stroke.", "error");
     }
     setIsSending(true);
     const annotationPayloads = strokes.map((stroke) => ({
@@ -479,20 +499,28 @@ export default function App() {
       await res.json();
       setSavedStrokes(isPlayingRef.current ? [] : strokes);
       setStrokes([]);
+      setSavedStrokes([]);
       setHasPending(false);
       drawingRef.current = false;
       currentStrokeRef.current = [];
       currentStrokeColorRef.current = color;
-      alert("Annotation saved");
+      showToast("Annotation saved");
     } catch (err) {
-      alert(`Failed to send annotation: ${err.message}`);
+      showToast(`Failed to send annotation: ${err.message}`, "error");
     } finally {
+      setIsPlaying(true);
+      isPlayingRef.current = true;
       setIsSending(false);
     }
   };
 
   return (
     <div className="app">
+      {toast && (
+        <div className={`toast ${toast.variant}`} role="status">
+          {toast.message}
+        </div>
+      )}
       <header className="top">
         <div>
           <h1>TissueTrackr React Annotator</h1>
