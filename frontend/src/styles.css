@@ -167,22 +167,10 @@ button.danger { background: var(--danger); color: #0f0b12; }
   -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
 }
-.actionBar {
-  position: absolute;
-  bottom: 12px;
-  right: 12px;
-  display: flex;
-  gap: 8px;
-  padding: 8px;
-  background: rgba(13, 18, 36, 0.85);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
-}
-.actionBar .ghost {
-  background: transparent;
-  color: var(--text);
+.actionBarPanel {
+  border: 1px solid rgba(11, 216, 255, 0.35);
+  background: linear-gradient(140deg, rgba(11, 216, 255, 0.08), rgba(19, 26, 46, 0.9));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 .playbackHint {
   position: absolute;

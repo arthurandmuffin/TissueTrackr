@@ -553,7 +553,22 @@ export default function App() {
             </div>
           </div>
 
-                    <div className="block">
+          <div className="block">
+            <h2>Tracking Preset</h2>
+            <label className="label">Video Type</label>
+            <select
+              value={trackingConfig.detector}
+              onChange={(e) => handleTrackingChange("detector", e.target.value)}
+            >
+              <option value="echo-cardio">Echo Cardio</option>
+              <option value="lap">Laparoscopy</option>
+              <option value="ultra">Intrapartum</option>
+              <option value="pocus">POCUS</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+
+          <div className="block">
             <h2>Annotation</h2>
             <label className="label">Stroke color</label>
             <input type="color" value={color} onChange={(e) => setColor(e.target.value)} />
@@ -599,21 +614,19 @@ export default function App() {
             <p className="muted">Draw: drag to sketch. Still: no drawing. Erase: drag over strokes to remove them.</p>
           </div>
 
-
-          <div className="block">
-            <h2>Tracking Preset</h2>
-            <label className="label">Video Type</label>
-            <select
-              value={trackingConfig.detector}
-              onChange={(e) => handleTrackingChange("detector", e.target.value)}
-            >
-              <option value="echo-cardio">Echo Cardio</option>
-              <option value="lap">Laparoscopy</option>
-              <option value="ultra">Intrapartum</option>
-              <option value="pocus">POCUS</option>
-              <option value="custom">Custom</option>
-            </select>
-          </div>
+          {hasPending && (
+            <div className="block actionBarPanel">
+              <h2>Pending Annotation</h2>
+              <div className="row">
+                <button onClick={sendAnnotation} disabled={!streaming || isSending}>
+                  {isSending ? "Saving..." : "Save annotation"}
+                </button>
+                <button className="ghost" type="button" onClick={cancelAnnotation} disabled={isSending}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="block">
             <h2>Tracking</h2>
@@ -697,16 +710,6 @@ export default function App() {
             <div className="badge">
               {streaming ? `Frame ${frameId || "-"} • ${landmarks.length} landmarks` : "Waiting..."}
             </div>
-            {hasPending && (
-              <div className="actionBar">
-                <button onClick={sendAnnotation} disabled={!streaming || isSending}>
-                  {isSending ? "Saving..." : "Save annotation"}
-                </button>
-                <button className="ghost" type="button" onClick={cancelAnnotation} disabled={isSending}>
-                  Cancel
-                </button>
-              </div>
-            )}
             {showPlaybackHint && (
               <button
                 type="button"
