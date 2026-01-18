@@ -2,7 +2,7 @@ import asyncio
 import base64
 import json
 import os
-from typing import Dict, Optional
+from typing import Dict
 
 from fastapi import FastAPI, WebSocketDisconnect, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,6 +45,9 @@ def _build_anchor_points(landmarks):
 
 
 async def _broadcast_frame(frame, frame_state):
+    """
+    Broadcasts frame & relevant metadata to clients subscribed to websocket endpoint
+    """
     if not active_clients:
         return
 
@@ -79,15 +82,8 @@ async def _broadcast_frame(frame, frame_state):
 @app.websocket("/ws/incoming-stream")
 async def websocket_incoming_stream(websocket: WebSocket):
     """
-    WebSocket endpoint for receiving incoming video streams.
-    
-    Processes frames in real-time and detects anchor points.
-    
-    Expected message format from client:
-    - Binary frame data (raw JPEG/PNG bytes)
-    
-    Server response:
-    - JSON with anchor points detected in each frame
+    WebSocket endpoint for receiving video data in binary frame form.
+    Process frames in real time and detect anchor points.
     """
     await websocket.accept()
     
@@ -128,16 +124,11 @@ async def websocket_incoming_stream(websocket: WebSocket):
         anchor_manager.reset_tracking_state()
         await websocket.close()
 
+# Websocket to subscribe to stream
 @app.websocket("/ws/outgoing-stream")
 async def websocket_outgoing_stream(websocket: WebSocket):
     """
-    WebSocket endpoint for sending processed video streams to clients.
-    
-    Clients connect to receive processed frames with annotations.
-    
-    Server sends:
-    - Processed frame data with anchor points visualized
-    - Metadata about detected features
+    WebSocket endpoint for clients to view video streams.
     """
     await websocket.accept()
     active_clients[websocket] = {"include_frame": True}
@@ -164,20 +155,11 @@ async def websocket_outgoing_stream(websocket: WebSocket):
     finally:
         await websocket.close()
 
+# Create annotation
 @app.post("/annotations")
 async def receive_annotations(payload: AnnotationsIn):
     """
-    Endpoint for receiving incoming annotations.
-    
-    Accepts annotation data (e.g., user markings, corrections, metadata).
-    
-    Expected payload:
-    - frame_id: Identifier for the frame being annotated
-    - annotations: List of annotation objects with coordinates and metadata
-    - timestamp: When the annotation was created
-    
-    Returns:
-    - Confirmation of annotation receipt and storage
+    Endpoint for receiving incoming annotations (timestamp, frame_id, annotation_detail)
     """
     try:
         created = anchor_manager.register_annotations(payload)
@@ -195,6 +177,9 @@ async def receive_annotations(payload: AnnotationsIn):
 
 @app.post("/frames/pin")
 async def pin_frame(payload: FramePinRequest):
+    """
+    Cache frames from specified frame onwards, prevents droppage through sliding window cache.
+    """
     try:
         anchor_manager.pin_frame(payload.frame_id)
         return JSONResponse({"success": True, "frame_id": payload.frame_id})
@@ -203,21 +188,29 @@ async def pin_frame(payload: FramePinRequest):
 
 @app.post("/frames/unpin")
 async def unpin_frame(payload: FramePinRequest):
+    """
+    Removes cache drop protection from unpinned frame to next pinned frame / sliding window
+    """
     anchor_manager.unpin_frame(payload.frame_id)
     return JSONResponse({"success": True, "frame_id": payload.frame_id})
 
 @app.get("/tracking/config")
 async def get_tracking_config():
+    """
+    Get current detection configs
+    """
     return JSONResponse(jsonable_encoder(anchor_manager.get_tracking_config()))
 
 @app.post("/tracking/config")
 async def update_tracking_config(payload: TrackingConfigUpdate):
+    """
+    Update detection configs
+    """
     try:
         updated = anchor_manager.update_tracking_config(payload)
         return JSONResponse(jsonable_encoder(updated))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
 
 @app.delete("/annotations")
 async def clear_annotations():

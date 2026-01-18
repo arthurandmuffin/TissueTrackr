@@ -20,13 +20,6 @@ class FrameProcessor:
         max_dimension: Optional[int] = None,
         detector_type: DetectorType = DetectorType.akaze,
     ):
-        """
-        Initialize the frame processor.
-        
-        Args:
-            max_features: Maximum number of features to detect per frame
-            max_dimension: Optional max length for width/height used in detection
-        """
         self.max_features = max_features
         self.max_dimension = max_dimension
         self.detector_type = detector_type
@@ -49,17 +42,7 @@ class FrameProcessor:
     
     def detect_anchor_points(self, frame: np.ndarray) -> Dict:
         """
-        Detect sharp features (anchor points) in a frame using the configured detector.
-        
-        Args:
-            frame: Input frame as numpy array
-            
-        Returns:
-            Dictionary containing:
-                - keypoints: List of detected keypoints
-                - descriptors: Feature descriptors
-                - count: Number of keypoints found
-                - coordinates: List of (x, y) coordinates
+        Detect sharp features in frame using configured detectors
         """
         if frame is None or frame.size == 0:
             return {
@@ -125,14 +108,7 @@ class FrameProcessor:
     
     def draw_anchor_points(self, frame: np.ndarray, anchor_points: Dict) -> np.ndarray:
         """
-        Draw detected anchor points on the frame.
-        
-        Args:
-            frame: Input frame
-            anchor_points: Dictionary from detect_anchor_points
-            
-        Returns:
-            Frame with drawn keypoints
+        Draw detected anchor points on the frame
         """
         output_frame = frame.copy()
         keypoints = anchor_points.get("keypoints", [])
@@ -164,14 +140,7 @@ class FrameProcessor:
         transform_priority: TransformPriority = TransformPriority.global_first,
     ) -> np.ndarray:
         """
-        Draw annotation geometries on the frame.
-
-        Args:
-            frame: Input frame
-            annotations: List of AnnotationRecord models
-
-        Returns:
-            Frame with annotations drawn
+        Draw annotation geometries on the frame
         """
         if not annotations:
             return frame
@@ -261,6 +230,9 @@ class FrameProcessor:
         frame_id: Optional[str] = None,
         origin: Tuple[int, int] = (10, 55),
     ) -> np.ndarray:
+        """
+        Draw some stats on frame, debug use
+        """
         output_frame = frame.copy()
         x0, y0 = origin
         cv2.putText(
@@ -294,14 +266,7 @@ class FrameProcessor:
 
     def draw_landmarks(self, frame: np.ndarray, landmarks: List) -> np.ndarray:
         """
-        Draw landmark points on the frame.
-
-        Args:
-            frame: Input frame
-            landmarks: List of Landmark models
-
-        Returns:
-            Frame with landmarks drawn
+        Draw landmark points on the frame
         """
         output_frame = frame.copy()
         for landmark in landmarks:
@@ -333,13 +298,6 @@ class FrameProcessor:
     def process_frame(self, frame: np.ndarray, draw: bool = False) -> Dict:
         """
         Process a single frame and detect anchor points.
-        
-        Args:
-            frame: Input frame as numpy array
-            draw: Whether to draw keypoints on the frame
-            
-        Returns:
-            Dictionary with processing results
         """
         anchor_points = self.detect_anchor_points(frame)
         

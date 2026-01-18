@@ -5,7 +5,7 @@ import websockets
 
 WS_URL = "ws://127.0.0.1:8000/ws/incoming-stream"
 JPEG_QUALITY = 80
-FPS_LIMIT = 20  # set None to send as fast as possible
+FPS_LIMIT = 120  # set None to send as fast as possible
 
 async def main():
     parser = argparse.ArgumentParser(
@@ -31,7 +31,7 @@ async def main():
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 continue
 
-            # Encode frame as JPEG bytes (what your server expects)
+            # Encode frame as JPEG bytes
             ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
             if not ok:
                 continue

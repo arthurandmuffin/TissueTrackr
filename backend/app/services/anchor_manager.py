@@ -165,6 +165,9 @@ class AnchorManager:
         annotations: Optional[List[AnnotationRecord]] = None,
         frame_id: Optional[str] = None,
     ) -> np.ndarray:
+        """
+        Render frames by superimposing annotations onto video feed frame
+        """
         output_frame = frame.copy()
         total_landmarks = 0
         if self.map_state is not None:
@@ -235,6 +238,9 @@ class AnchorManager:
         return self.get_tracking_config()
 
     def process_frame(self, frame: np.ndarray) -> FrameState:
+        """
+        Process an incoming frame. Frame is grayscaled and downscaled to max 600 pixels on an axis.
+        """
         self.frame_index += 1
         frame_id = f"frame-{self.frame_index}"
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -385,6 +391,9 @@ class AnchorManager:
         return filtered
 
     def pin_frame(self, frame_id: str) -> None:
+        """
+        Protect later frames from cache drop
+        """
         if frame_id in self.pinned_frames:
             return
         snapshot = self.frame_cache.pop(frame_id, None)
@@ -396,6 +405,9 @@ class AnchorManager:
         self._prune_frame_cache()
 
     def unpin_frame(self, frame_id: str) -> None:
+        """
+        Remove cache drop prodection
+        """
         self.pinned_frames.pop(frame_id, None)
         self._prune_frame_cache()
 
@@ -541,6 +553,9 @@ class AnchorManager:
         keypoints: List[cv2.KeyPoint],
         descriptors: Optional[np.ndarray],
     ) -> Optional[MapMatch]:
+        """
+        Tries to match reference poitns to seen points to build map
+        """
         if descriptors is None or len(keypoints) == 0 or not map_state.landmarks:
             return None
 
@@ -675,12 +690,18 @@ class AnchorManager:
     def _apply_affine(
         self, matrix: np.ndarray, point: Tuple[float, float]
     ) -> Tuple[float, float]:
+        """
+        Good for contorted, non-planar stuff
+        """
         x, y = float(point[0]), float(point[1])
         x_new = matrix[0, 0] * x + matrix[0, 1] * y + matrix[0, 2]
         y_new = matrix[1, 0] * x + matrix[1, 1] * y + matrix[1, 2]
         return float(x_new), float(y_new)
 
     def register_annotations(self, payload: AnnotationsIn) -> List[AnnotationRecord]:
+        """
+        Add annotation
+        """
         snapshot = self._get_snapshot(payload.frame_id)
         if payload.frame_id and snapshot is None:
             raise ValueError("Frame not found in cache or pinned storage.")
@@ -752,6 +773,9 @@ class AnchorManager:
         return created
 
     def clear_annotations(self) -> int:
+        """
+        Clear all annotations and return the count
+        """
         count = len(self.annotations)
         self.annotations.clear()
         return count
@@ -759,6 +783,9 @@ class AnchorManager:
     def _build_annotation_record(
         self, frame_id: str, annotation: AnnotationCreate
     ) -> AnnotationRecord:
+        """
+        Build an annotation record for the specified frame
+        """
         now = self._now()
         return AnnotationRecord(
             id=annotation.id or str(uuid4()),
@@ -776,6 +803,9 @@ class AnchorManager:
         hint: Optional[LocalAnchorHint],
         gray_frame: Optional[np.ndarray],
     ) -> Tuple[Optional[LocalAnchor], Optional[LocalAnchorState]]:
+        """
+        Build a patch-based local anchor and tracking state
+        """
         if gray_frame is None or not record.points:
             return None, None
 
@@ -816,6 +846,9 @@ class AnchorManager:
         hint: Optional[LocalAnchorHint],
         gray_frame: Optional[np.ndarray],
     ) -> Tuple[Optional[LocalAnchor], Optional[LocalAnchorState]]:
+        """
+        Build a local anchor from annotation points and tracking state
+        """
         if gray_frame is None or not record.points:
             return None, None
 
@@ -850,6 +883,9 @@ class AnchorManager:
         hint: Optional[GlobalAnchorHint],
         landmarks: List[Landmark],
     ) -> Tuple[Optional[GlobalAnchor], Optional[GlobalAnchorState]]:
+        """
+        Build a global anchor from nearby landmarks and tracking state
+        """
         if not landmarks or not record.points:
             return None, None
 
@@ -892,6 +928,9 @@ class AnchorManager:
     def _update_local_anchor(
         self, state: LocalAnchorState, prev_gray: np.ndarray, gray: np.ndarray
     ) -> Optional[TransformMatrix]:
+        """
+        Update local anchor points and estimate the transform
+        """
         if state.last_points.size == 0:
             return None
 
@@ -931,6 +970,9 @@ class AnchorManager:
         prev_gray: np.ndarray,
         gray: np.ndarray,
     ) -> None:
+        """
+        Update local annotation points using optical flow
+        """
         local_state = state.local_state
         if local_state is None or local_state.last_points.size == 0:
             return
@@ -959,6 +1001,9 @@ class AnchorManager:
         reference_gray: np.ndarray,
         gray: np.ndarray,
     ) -> None:
+        """
+        Update local points from the reference frame using optical flow
+        """
         local_state = state.local_state
         if local_state is None or local_state.keyframe_points.size == 0:
             return
@@ -985,6 +1030,9 @@ class AnchorManager:
     def _track_points(
         self, prev_gray: np.ndarray, gray: np.ndarray, points: np.ndarray
     ) -> np.ndarray:
+        """
+        Track points between frames using optical flow
+        """
         new_points, status, _ = cv2.calcOpticalFlowPyrLK(
             prev_gray,
             gray,
@@ -1006,6 +1054,9 @@ class AnchorManager:
         current_gray: np.ndarray,
         update_record_points: bool,
     ) -> bool:
+        """
+        Advance local points through cached frames and update as needed
+        """
         local_state = state.local_state
         if local_state is None or local_state.last_points.size == 0:
             return False
@@ -1061,6 +1112,9 @@ class AnchorManager:
         state: AnnotationState,
         current_gray: np.ndarray,
     ) -> Optional[TransformMatrix]:
+        """
+        Advance cached local points and estimate a transform
+        """
         if not self._advance_local_points_from_cache(
             state, current_gray, update_record_points=False
         ):
@@ -1084,6 +1138,9 @@ class AnchorManager:
         reference_gray: np.ndarray,
         gray: np.ndarray,
     ) -> Optional[TransformMatrix]:
+        """
+        Estimate a local transform using the reference frame
+        """
         if local_state.keyframe_points.size == 0:
             return None
 
@@ -1120,6 +1177,9 @@ class AnchorManager:
     def _update_global_anchor(
         self, state: GlobalAnchorState, positions: Dict[str, Tuple[float, float]]
     ) -> Optional[TransformMatrix]:
+        """
+        Estimate a global transform from tracked landmark positions
+        """
         src_points = []
         dst_points = []
         for idx, lm_id in enumerate(state.landmark_ids):
@@ -1145,6 +1205,9 @@ class AnchorManager:
     def _update_map_anchor(
         self, state: AnnotationState
     ) -> Optional[TransformMatrix]:
+        """
+        Compute a map-based transform for the annotation state
+        """
         if state.map_keyframe_transform is None or self.last_map_transform is None:
             return None
         inv_current = self._invert_affine(self.last_map_transform)
@@ -1156,6 +1219,9 @@ class AnchorManager:
         return TransformMatrix(matrix=composed.tolist())
 
     def _invert_affine(self, matrix: np.ndarray) -> Optional[np.ndarray]:
+        """
+        Invert a 2x3 affine transform matrix
+        """
         if matrix.shape != (2, 3):
             return None
         affine = np.vstack([matrix, [0.0, 0.0, 1.0]])
@@ -1168,6 +1234,9 @@ class AnchorManager:
     def _compose_affine(
         self, left: np.ndarray, right: np.ndarray
     ) -> Optional[np.ndarray]:
+        """
+        Compose two 2x3 affine transform matrices
+        """
         if left.shape != (2, 3) or right.shape != (2, 3):
             return None
         left_3 = np.vstack([left, [0.0, 0.0, 1.0]])
@@ -1178,6 +1247,9 @@ class AnchorManager:
     def _translation_transform(
         self, src_points: np.ndarray, dst_points: np.ndarray
     ) -> Optional[TransformMatrix]:
+        """
+        Compute a translation-only transform from matching points
+        """
         src = src_points.reshape(-1, 2)
         dst = dst_points.reshape(-1, 2)
         if src.size == 0 or dst.size == 0:
@@ -1196,6 +1268,9 @@ class AnchorManager:
         dst_points: np.ndarray,
         transform_type: TransformType,
     ) -> Optional[TransformMatrix]:
+        """
+        Estimate a transform between source and destination points
+        """
         if transform_type == TransformType.homography:
             matrix, inliers = cv2.findHomography(
                 src_points, dst_points, cv2.RANSAC, 3.0
@@ -1221,6 +1296,9 @@ class AnchorManager:
     def _detect_patch_points(
         self, roi: np.ndarray, x_offset: int, y_offset: int
     ) -> np.ndarray:
+        """
+        Detect feature points in a patch and return absolute coordinates
+        """
         if roi.size == 0:
             return np.empty((0, 1, 2), dtype=np.float32)
 
@@ -1242,6 +1320,9 @@ class AnchorManager:
         return points.astype(np.float32).reshape(-1, 1, 2)
 
     def _centroid(self, points: List[Point2D]) -> Tuple[float, float]:
+        """
+        Compute the centroid of a list of points
+        """
         xs = [pt.x for pt in points]
         ys = [pt.y for pt in points]
         return float(sum(xs) / len(xs)), float(sum(ys) / len(ys))
@@ -1249,6 +1330,9 @@ class AnchorManager:
     def _patch_bounds(
         self, center: Tuple[float, float], radius: int, shape: Tuple[int, int]
     ) -> Tuple[int, int, int, int]:
+        """
+        Clamp a square patch around a center to image bounds
+        """
         height, width = shape[0], shape[1]
         x0 = max(0, int(center[0] - radius))
         y0 = max(0, int(center[1] - radius))
@@ -1257,10 +1341,16 @@ class AnchorManager:
         return x0, y0, x1, y1
 
     def _points_to_model(self, points: np.ndarray) -> List[Point2D]:
+        """
+        Convert numpy point arrays into Point2D models
+        """
         if points.size == 0:
             return []
         flat = points.reshape(-1, 2)
         return [Point2D(x=float(pt[0]), y=float(pt[1])) for pt in flat]
 
     def _now(self) -> datetime:
+        """
+        Return the current UTC time
+        """
         return datetime.now(timezone.utc)
