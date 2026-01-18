@@ -1,6 +1,8 @@
 import cv2
 import numpy as np
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
+
+from ..models import AnnotationRecord, GeometryType, Point2D, TransformMatrix
 
 class FrameProcessor:
     """Service for processing video frames and detecting sharp features as anchor points."""
@@ -89,6 +91,79 @@ class FrameProcessor:
         )
         
         return output_frame
+
+    def draw_annotations(
+        self, frame: np.ndarray, annotations: List[AnnotationRecord]
+    ) -> np.ndarray:
+        """
+        Draw annotation geometries on the frame.
+
+        Args:
+            frame: Input frame
+            annotations: List of AnnotationRecord models
+
+        Returns:
+            Frame with annotations drawn
+        """
+        if not annotations:
+            return frame
+
+        output_frame = frame.copy()
+        for annotation in annotations:
+            points = annotation.points or []
+            if not points:
+                continue
+
+            transform = annotation.local_transform or annotation.global_transform
+            coords = self._apply_transform(points, transform)
+            if coords.size == 0:
+                continue
+
+            color = (255, 140, 0)
+            thickness = 2
+            if annotation.geometry_type == GeometryType.point:
+                x, y = int(coords[0][0]), int(coords[0][1])
+                cv2.circle(output_frame, (x, y), 6, color, -1)
+            elif annotation.geometry_type == GeometryType.bbox and len(coords) >= 2:
+                x0, y0 = coords[0]
+                x1, y1 = coords[1]
+                left, right = int(min(x0, x1)), int(max(x0, x1))
+                top, bottom = int(min(y0, y1)), int(max(y0, y1))
+                cv2.rectangle(output_frame, (left, top), (right, bottom), color, thickness)
+            elif annotation.geometry_type in (GeometryType.polyline, GeometryType.polygon):
+                if len(coords) < 2:
+                    x, y = int(coords[0][0]), int(coords[0][1])
+                    cv2.circle(output_frame, (x, y), 6, color, -1)
+                else:
+                    poly = coords.reshape((-1, 1, 2)).astype(np.int32)
+                    closed = annotation.geometry_type == GeometryType.polygon
+                    cv2.polylines(output_frame, [poly], closed, color, thickness)
+            else:
+                x, y = int(coords[0][0]), int(coords[0][1])
+                cv2.circle(output_frame, (x, y), 6, color, -1)
+
+        return output_frame
+
+    def _apply_transform(
+        self,
+        points: List[Point2D],
+        transform: Optional[TransformMatrix],
+    ) -> np.ndarray:
+        coords = np.array([[pt.x, pt.y] for pt in points], dtype=np.float32)
+        if coords.size == 0 or transform is None:
+            return coords
+
+        matrix = np.array(transform.matrix, dtype=np.float32)
+        if matrix.shape == (2, 3):
+            coords = coords.reshape(-1, 1, 2)
+            transformed = cv2.transform(coords, matrix)
+            return transformed.reshape(-1, 2)
+        if matrix.shape == (3, 3):
+            coords = coords.reshape(-1, 1, 2)
+            transformed = cv2.perspectiveTransform(coords, matrix)
+            return transformed.reshape(-1, 2)
+
+        return coords
 
     def draw_landmarks(self, frame: np.ndarray, landmarks: List) -> np.ndarray:
         """

@@ -141,8 +141,19 @@ class AnchorManager:
         self.last_landmarks: List[Landmark] = []
         self.annotations: Dict[str, AnnotationState] = {}
 
-    def render_frame(self, frame: np.ndarray, landmarks: List[Landmark]) -> np.ndarray:
-        return self.frame_processor.draw_landmarks(frame, landmarks)
+    def render_frame(
+        self,
+        frame: np.ndarray,
+        landmarks: List[Landmark],
+        annotations: Optional[List[AnnotationRecord]] = None,
+    ) -> np.ndarray:
+        output_frame = frame.copy()
+        #output_frame = self.frame_processor.draw_landmarks(frame, landmarks)
+        if annotations:
+            output_frame = self.frame_processor.draw_annotations(
+                output_frame, annotations
+            )
+        return output_frame
 
     def process_frame(self, frame: np.ndarray) -> FrameState:
         self.frame_index += 1

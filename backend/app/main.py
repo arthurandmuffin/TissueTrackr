@@ -37,7 +37,9 @@ async def _broadcast_frame(frame, frame_state):
     )
     frame_payload = None
     if include_frame:
-        output_frame = anchor_manager.render_frame(frame, frame_state.landmarks)
+        output_frame = anchor_manager.render_frame(
+            frame, frame_state.landmarks, frame_state.annotations
+        )
         ok, buffer = cv2.imencode(".jpg", output_frame)
         if ok:
             frame_payload = base64.b64encode(buffer).decode("ascii")
