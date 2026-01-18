@@ -13,7 +13,7 @@ from .services.anchor_manager import AnchorManager
 app = FastAPI(title="TissueTrackr Backend")
 
 # Initialize anchor manager
-anchor_manager = AnchorManager(max_features=500)
+anchor_manager = AnchorManager(max_features=500, max_detection_dimension=960)
 
 # Store active clients for video streaming
 active_clients: Dict[object, Dict[str, bool]] = {}

@@ -123,7 +123,8 @@ async def main() -> None:
         keepalive_task = asyncio.create_task(_keepalive(ws, args.keepalive))
         window_title = "TissueTrackr Outgoing Stream"
         frame_index = 0
-        annotation_frame = random.randint(ANNOTATION_FRAME_MIN, ANNOTATION_FRAME_MAX)
+        annotation_frame = 0
+        # annotation_frame = random.randint(ANNOTATION_FRAME_MIN, ANNOTATION_FRAME_MAX)
         annotation_attempted = False
         try:
             while True:

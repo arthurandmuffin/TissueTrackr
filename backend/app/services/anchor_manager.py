@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 from uuid import uuid4
 
 import cv2
@@ -49,92 +49,72 @@ class AnnotationState:
     global_state: Optional[GlobalAnchorState]
 
 
-class LandmarkMap:
-    def __init__(self, max_features: int = 500):
-        self.matcher = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
-        self.next_id = 1
-        self.prev_descriptors: Optional[np.ndarray] = None
-        self.prev_ids: List[str] = []
-        self.track_ages: Dict[str, int] = {}
-        self.max_features = max_features
+@dataclass
+class MapLandmark:
+    id: str
+    position: Tuple[float, float]
+    descriptor: np.ndarray
+    age: int = 1
+    last_seen_frame: int = 0
 
-    def _new_id(self) -> str:
-        value = f"lm_{self.next_id}"
-        self.next_id += 1
+
+@dataclass
+class MapMatch:
+    transform: np.ndarray
+    inlier_matches: List[cv2.DMatch]
+    map_ids: List[str]
+
+@dataclass
+class MapState:
+    landmarks: Dict[str, MapLandmark]
+    next_landmark_id: int = 1
+
+    def new_landmark_id(self) -> str:
+        value = f"map_lm_{self.next_landmark_id}"
+        self.next_landmark_id += 1
         return value
-
-    def update(
-        self,
-        keypoints: List[cv2.KeyPoint],
-        descriptors: Optional[np.ndarray],
-    ) -> Tuple[List[Landmark], Dict[str, Tuple[float, float]]]:
-        if descriptors is None or len(keypoints) == 0:
-            self.prev_descriptors = descriptors
-            self.prev_ids = []
-            self.track_ages = {}
-            return [], {}
-
-        if self.prev_descriptors is None or len(self.prev_ids) == 0:
-            ids = [self._new_id() for _ in keypoints]
-        else:
-            matches = self.matcher.match(self.prev_descriptors, descriptors)
-            ids = [None] * len(keypoints)
-            used_prev = set()
-            for match in matches:
-                if match.queryIdx >= len(self.prev_ids):
-                    continue
-                prev_id = self.prev_ids[match.queryIdx]
-                if prev_id in used_prev:
-                    continue
-                ids[match.trainIdx] = prev_id
-                used_prev.add(prev_id)
-            for idx, lm_id in enumerate(ids):
-                if lm_id is None:
-                    ids[idx] = self._new_id()
-
-        new_ages: Dict[str, int] = {}
-        landmarks: List[Landmark] = []
-        positions: Dict[str, Tuple[float, float]] = {}
-        for idx, kp in enumerate(keypoints):
-            lm_id = ids[idx]
-            age = self.track_ages.get(lm_id, 0) + 1
-            new_ages[lm_id] = age
-            x, y = float(kp.pt[0]), float(kp.pt[1])
-            landmarks.append(
-                Landmark(
-                    id=lm_id,
-                    x=x,
-                    y=y,
-                    size=float(kp.size),
-                    angle=float(kp.angle),
-                    age=age,
-                )
-            )
-            positions[lm_id] = (x, y)
-
-        self.track_ages = new_ages
-        self.prev_descriptors = descriptors
-        self.prev_ids = ids
-        return landmarks, positions
 
 
 class AnchorManager:
     def __init__(
         self,
-        max_features: int = 500,
+        max_features: int = 3000,
+        max_detection_dimension: Optional[int] = None,
         local_patch_radius: int = 96,
         local_min_points: int = 20,
         local_max_points: int = 80,
         global_k_nearest: int = 12,
         min_landmark_age: int = 2,
+        render_landmarks: bool = True,
+        map_max_landmarks: int = 5000,
+        map_max_new_per_frame: int = 50,
+        map_min_inliers: int = 10,
+        map_lost_threshold: int = 5,
+        map_match_ratio: float = 0.85,
+        allow_new_landmarks: bool = True,
+        freeze_new_landmarks_after_frames: Optional[int] = 600,
     ):
-        self.frame_processor = FrameProcessor(max_features=max_features)
-        self.landmark_map = LandmarkMap(max_features=max_features)
+        self.frame_processor = FrameProcessor(
+            max_features=max_features,
+            max_dimension=max_detection_dimension,
+        )
         self.local_patch_radius = local_patch_radius
         self.local_min_points = local_min_points
         self.local_max_points = local_max_points
         self.global_k_nearest = global_k_nearest
         self.min_landmark_age = min_landmark_age
+        self.render_landmarks = render_landmarks
+        self.map_max_landmarks = map_max_landmarks
+        self.map_max_new_per_frame = map_max_new_per_frame
+        self.map_min_inliers = map_min_inliers
+        self.map_lost_threshold = map_lost_threshold
+        self.map_match_ratio = map_match_ratio
+        self.allow_new_landmarks = allow_new_landmarks
+        self.freeze_new_landmarks_after_frames = freeze_new_landmarks_after_frames
+        self.map_matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+        self.map_state: Optional[MapState] = None
+        self.lost_frames = 0
+        self.last_map_transform: Optional[np.ndarray] = None
         self.frame_index = 0
         self.prev_gray: Optional[np.ndarray] = None
         self.last_frame: Optional[np.ndarray] = None
@@ -148,7 +128,18 @@ class AnchorManager:
         annotations: Optional[List[AnnotationRecord]] = None,
     ) -> np.ndarray:
         output_frame = frame.copy()
-        #output_frame = self.frame_processor.draw_landmarks(frame, landmarks)
+        total_landmarks = 0
+        if self.map_state is not None:
+            total_landmarks = len(self.map_state.landmarks)
+        output_frame = self.frame_processor.draw_stats(
+            output_frame,
+            self._should_allow_new_landmarks(),
+            total_landmarks,
+        )
+        if self.render_landmarks:
+            output_frame = self.frame_processor.draw_landmarks(
+                output_frame, landmarks
+            )
         if annotations:
             output_frame = self.frame_processor.draw_annotations(
                 output_frame, annotations
@@ -161,7 +152,7 @@ class AnchorManager:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
         detection = self.frame_processor.detect_anchor_points(frame)
-        landmarks, positions = self.landmark_map.update(
+        landmarks, positions = self._update_global_map(
             detection["keypoints"], detection["descriptors"]
         )
 
@@ -187,6 +178,216 @@ class AnchorManager:
             landmarks=landmarks,
             annotations=[state.record for state in self.annotations.values()],
         )
+
+    def set_allow_new_landmarks(self, enabled: bool) -> None:
+        self.allow_new_landmarks = bool(enabled)
+
+    def _should_allow_new_landmarks(self) -> bool:
+        if not self.allow_new_landmarks:
+            return False
+        if (
+            self.freeze_new_landmarks_after_frames is not None
+            and len(self.map_state.landmarks) >= self.map_max_landmarks
+        ):
+            return False
+        return True
+
+    def _update_global_map(
+        self,
+        keypoints: List[cv2.KeyPoint],
+        descriptors: Optional[np.ndarray],
+    ) -> Tuple[List[Landmark], Dict[str, Tuple[float, float]]]:
+        if descriptors is None or len(keypoints) == 0:
+            self.lost_frames = min(self.map_lost_threshold, self.lost_frames + 1)
+            return [], {}
+
+        if self.map_state is None or not self.map_state.landmarks:
+            return self._initialize_map(keypoints, descriptors)
+
+        match = self._match_map(self.map_state, keypoints, descriptors)
+        if match is None:
+            self.lost_frames = min(self.map_lost_threshold, self.lost_frames + 1)
+            return [], {}
+        else:
+            self.lost_frames = 0
+
+        return self._update_map_from_match(
+            self.map_state, match, keypoints, descriptors
+        )
+
+    def _initialize_map(
+        self,
+        keypoints: List[cv2.KeyPoint],
+        descriptors: np.ndarray,
+    ) -> Tuple[List[Landmark], Dict[str, Tuple[float, float]]]:
+        self.map_state = MapState(landmarks={})
+
+        landmarks: List[Landmark] = []
+        positions: Dict[str, Tuple[float, float]] = {}
+        max_new = min(
+            len(keypoints),
+            self.map_max_new_per_frame,
+            self.map_max_landmarks,
+        )
+        for idx in range(max_new):
+            kp = keypoints[idx]
+            lm_id = self.map_state.new_landmark_id()
+            self.map_state.landmarks[lm_id] = MapLandmark(
+                id=lm_id,
+                position=(float(kp.pt[0]), float(kp.pt[1])),
+                descriptor=descriptors[idx].copy(),
+                last_seen_frame=self.frame_index,
+            )
+            landmarks.append(
+                Landmark(
+                    id=lm_id,
+                    x=float(kp.pt[0]),
+                    y=float(kp.pt[1]),
+                    size=float(kp.size),
+                    angle=float(kp.angle),
+                    age=1,
+                )
+            )
+            positions[lm_id] = (float(kp.pt[0]), float(kp.pt[1]))
+        self.last_map_transform = np.array([[1, 0, 0], [0, 1, 0]], dtype=np.float32)
+        return landmarks, positions
+
+    def _match_map(
+        self,
+        map_state: MapState,
+        keypoints: List[cv2.KeyPoint],
+        descriptors: Optional[np.ndarray],
+    ) -> Optional[MapMatch]:
+        if descriptors is None or len(keypoints) == 0 or not map_state.landmarks:
+            return None
+
+        map_ids = list(map_state.landmarks.keys())
+        map_descriptors = np.array(
+            [map_state.landmarks[lm_id].descriptor for lm_id in map_ids]
+        )
+        map_points = np.array(
+            [map_state.landmarks[lm_id].position for lm_id in map_ids],
+            dtype=np.float32,
+        )
+
+        matches = self.map_matcher.knnMatch(map_descriptors, descriptors, k=2)
+        good_matches: List[cv2.DMatch] = []
+        for pair in matches:
+            if len(pair) < 2:
+                continue
+            m, n = pair
+            if m.distance < self.map_match_ratio * n.distance:
+                good_matches.append(m)
+
+        if len(good_matches) < self.map_min_inliers:
+            return None
+
+        src_points = np.array(
+            [keypoints[m.trainIdx].pt for m in good_matches], dtype=np.float32
+        )
+        dst_points = np.array(
+            [map_points[m.queryIdx] for m in good_matches], dtype=np.float32
+        )
+        matrix, inliers = cv2.estimateAffinePartial2D(
+            src_points,
+            dst_points,
+            method=cv2.RANSAC,
+            ransacReprojThreshold=5.0,
+        )
+        if matrix is None:
+            return None
+
+        if inliers is None:
+            inlier_mask = np.ones(len(good_matches), dtype=bool)
+        else:
+            inlier_mask = inliers.reshape(-1) == 1
+        inlier_matches = [
+            good_matches[idx]
+            for idx, ok in enumerate(inlier_mask)
+            if ok
+        ]
+        if len(inlier_matches) < self.map_min_inliers:
+            return None
+
+        return MapMatch(
+            transform=matrix,
+            inlier_matches=inlier_matches,
+            map_ids=map_ids,
+        )
+
+    def _update_map_from_match(
+        self,
+        map_state: MapState,
+        match: MapMatch,
+        keypoints: List[cv2.KeyPoint],
+        descriptors: np.ndarray,
+    ) -> Tuple[List[Landmark], Dict[str, Tuple[float, float]]]:
+        landmarks: List[Landmark] = []
+        positions: Dict[str, Tuple[float, float]] = {}
+        matched_frame_indices: Set[int] = set()
+
+        for m in match.inlier_matches:
+            map_id = match.map_ids[m.queryIdx]
+            kp = keypoints[m.trainIdx]
+            map_lm = map_state.landmarks[map_id]
+            map_lm.age += 1
+            map_lm.last_seen_frame = self.frame_index
+            map_lm.descriptor = descriptors[m.trainIdx].copy()
+            matched_frame_indices.add(m.trainIdx)
+
+            landmarks.append(
+                Landmark(
+                    id=map_id,
+                    x=float(kp.pt[0]),
+                    y=float(kp.pt[1]),
+                    size=float(kp.size),
+                    angle=float(kp.angle),
+                    age=map_lm.age,
+                )
+            )
+            positions[map_id] = (float(kp.pt[0]), float(kp.pt[1]))
+
+        new_count = 0
+        if self._should_allow_new_landmarks():
+            for idx, kp in enumerate(keypoints):
+                if idx in matched_frame_indices:
+                    continue
+                if len(map_state.landmarks) >= self.map_max_landmarks:
+                    break
+                if new_count >= self.map_max_new_per_frame:
+                    break
+                map_pos = self._apply_affine(match.transform, kp.pt)
+                lm_id = map_state.new_landmark_id()
+                map_state.landmarks[lm_id] = MapLandmark(
+                    id=lm_id,
+                    position=map_pos,
+                    descriptor=descriptors[idx].copy(),
+                    last_seen_frame=self.frame_index,
+                )
+                new_count += 1
+
+                landmarks.append(
+                    Landmark(
+                        id=lm_id,
+                        x=float(kp.pt[0]),
+                        y=float(kp.pt[1]),
+                        size=float(kp.size),
+                        angle=float(kp.angle),
+                        age=1,
+                    )
+                )
+                positions[lm_id] = (float(kp.pt[0]), float(kp.pt[1]))
+
+        self.last_map_transform = match.transform
+        return landmarks, positions
+
+    def _apply_affine(
+        self, matrix: np.ndarray, point: Tuple[float, float]
+    ) -> Tuple[float, float]:
+        x, y = float(point[0]), float(point[1])
+        x_new = matrix[0, 0] * x + matrix[0, 1] * y + matrix[0, 2]
+        y_new = matrix[1, 0] * x + matrix[1, 1] * y + matrix[1, 2]
+        return float(x_new), float(y_new)
 
     def register_annotations(self, payload: AnnotationsIn) -> List[AnnotationRecord]:
         if self.last_frame is None:

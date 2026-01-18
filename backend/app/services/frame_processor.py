@@ -6,21 +6,23 @@ from ..models import AnnotationRecord, GeometryType, Point2D, TransformMatrix
 
 class FrameProcessor:
     """Service for processing video frames and detecting sharp features as anchor points."""
-    
-    def __init__(self, max_features: int = 500):
+
+    def __init__(self, max_features: int = 500, max_dimension: Optional[int] = None):
         """
         Initialize the frame processor.
         
         Args:
             max_features: Maximum number of features to detect per frame
+            max_dimension: Optional max length for width/height used in detection
         """
         self.max_features = max_features
-        # Initialize SIFT detector for scale-invariant feature detection
-        self.detector = cv2.SIFT_create(nfeatures=max_features)
+        self.max_dimension = max_dimension
+        # Initialize ORB detector for fast binary feature detection.
+        self.detector = cv2.ORB_create(nfeatures=max_features)
     
     def detect_anchor_points(self, frame: np.ndarray) -> Dict:
         """
-        Detect sharp features (anchor points) in a frame using SIFT.
+        Detect sharp features (anchor points) in a frame using ORB.
         
         Args:
             frame: Input frame as numpy array
@@ -42,9 +44,45 @@ class FrameProcessor:
         
         # Convert to grayscale for feature detection
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        scale = 1.0
+        if self.max_dimension and self.max_dimension > 0:
+            height, width = gray.shape[:2]
+            max_side = max(height, width)
+            if max_side > self.max_dimension:
+                scale = self.max_dimension / max_side
+                new_w = max(1, int(round(width * scale)))
+                new_h = max(1, int(round(height * scale)))
+                gray = cv2.resize(
+                    gray, (new_w, new_h), interpolation=cv2.INTER_AREA
+                )
         
         # Detect keypoints and descriptors
         keypoints, descriptors = self.detector.detectAndCompute(gray, None)
+
+        if scale != 1.0 and keypoints:
+            inv_scale = 1.0 / scale
+            scaled_keypoints = []
+            for kp in keypoints:
+                scaled_keypoints.append(
+                    cv2.KeyPoint(
+                        kp.pt[0] * inv_scale,
+                        kp.pt[1] * inv_scale,
+                        kp.size * inv_scale,
+                        kp.angle,
+                        kp.response,
+                        kp.octave,
+                        kp.class_id,
+                    )
+                )
+            keypoints = scaled_keypoints
+
+        if len(keypoints) > self.max_features:
+            order = np.argsort([kp.response for kp in keypoints])[::-1]
+            order = order[: self.max_features]
+            keypoints = [keypoints[idx] for idx in order]
+            if descriptors is not None:
+                descriptors = descriptors[order]
         
         # Extract coordinates from keypoints
         coordinates = [(int(kp.pt[0]), int(kp.pt[1])) for kp in keypoints]
@@ -164,6 +202,35 @@ class FrameProcessor:
             return transformed.reshape(-1, 2)
 
         return coords
+    
+    def draw_stats(
+        self,
+        frame: np.ndarray,
+        new_landmarks: bool,
+        total_landmarks: int,
+        origin: Tuple[int, int] = (10, 55),
+    ) -> np.ndarray:
+        output_frame = frame.copy()
+        x0, y0 = origin
+        cv2.putText(
+            output_frame,
+            f"New Landmarks: {new_landmarks}",
+            (x0, y0),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (0, 255, 0),
+            2,
+        )
+        cv2.putText(
+            output_frame,
+            f"Map Landmarks: {total_landmarks}",
+            (x0, y0 + 25),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (0, 255, 0),
+            2,
+        )
+        return output_frame
 
     def draw_landmarks(self, frame: np.ndarray, landmarks: List) -> np.ndarray:
         """
@@ -181,6 +248,15 @@ class FrameProcessor:
             x, y = int(landmark.x), int(landmark.y)
             cv2.circle(output_frame, (x, y), 4, (0, 255, 0), 2)
             cv2.circle(output_frame, (x, y), 2, (0, 0, 255), -1)
+            cv2.putText(
+                output_frame,
+                str(landmark.id),
+                (x + 6, y - 6),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                (255, 255, 255),
+                1,
+            )
 
         cv2.putText(
             output_frame,
