@@ -112,9 +112,9 @@ class AnchorManager:
         allow_new_landmarks: bool = True,
         freeze_new_landmarks_after_frames: Optional[int] = 600,
         frame_cache_size: int = 600,
-        detector_type: DetectorType = DetectorType.akaze,
-        transform_priority: TransformPriority = TransformPriority.global_first,
-        local_tracking_mode: LocalTrackingMode = LocalTrackingMode.patch,
+        detector_type: DetectorType = DetectorType.sift,
+        transform_priority: TransformPriority = TransformPriority.local_first,
+        local_tracking_mode: LocalTrackingMode = LocalTrackingMode.annotation_transform,
         default_anchor_transform: TransformType = TransformType.similarity,
         map_transform: TransformType = TransformType.similarity,
     ):

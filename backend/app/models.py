@@ -132,9 +132,9 @@ class FrameState(BaseModel):
 
 
 class TrackingConfig(BaseModel):
-    detector: DetectorType = DetectorType.akaze
-    transform_priority: TransformPriority = TransformPriority.global_first
-    local_tracking_mode: LocalTrackingMode = LocalTrackingMode.patch
+    detector: DetectorType = DetectorType.sift
+    transform_priority: TransformPriority = TransformPriority.local_first
+    local_tracking_mode: LocalTrackingMode = LocalTrackingMode.annotation_transform
     default_anchor_transform: TransformType = TransformType.similarity
     map_transform: TransformType = TransformType.similarity
     map_match_ratio: float = 0.85

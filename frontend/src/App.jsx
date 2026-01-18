@@ -21,11 +21,11 @@ export default function App() {
   const [lastPlaybackAction, setLastPlaybackAction] = useState("pause");
   const [toast, setToast] = useState(null);
   const [trackingConfig, setTrackingConfig] = useState({
-    detector: "akaze",
-    transform_priority: "global_first",
-    local_tracking_mode: "patch",
-    default_anchor_transform: "similarity",
+    detector: "sift",
+    transform_priority: "local_first",
+    local_tracking_mode: "annotation_transform",
     map_transform: "similarity",
+    default_anchor_transform: "similarity",
   });
 
   const frameRef = useRef(null);
@@ -628,55 +628,65 @@ export default function App() {
             </div>
           )}
 
-          <div className="block">
-            <h2>Tracking</h2>
-            <label className="label">Detector</label>
-            <select
-              value={trackingConfig.detector}
-              onChange={(e) => handleTrackingChange("detector", e.target.value)}
-            >
-              <option value="orb">ORB</option>
-              <option value="akaze">AKAZE</option>
-              <option value="sift">SIFT</option>
-            </select>
-            <label className="label">Transform priority</label>
-            <select
-              value={trackingConfig.transform_priority}
-              onChange={(e) => handleTrackingChange("transform_priority", e.target.value)}
-            >
-              <option value="global_first">Global first</option>
-              <option value="local_first">Local first</option>
-            </select>
-            <label className="label">Local tracking mode</label>
-            <select
-              value={trackingConfig.local_tracking_mode}
-              onChange={(e) => handleTrackingChange("local_tracking_mode", e.target.value)}
-            >
-              <option value="patch">Patch corners</option>
-              <option value="annotation_transform">Annotation points (transform)</option>
-              <option value="annotation_points">Annotation points (per-point)</option>
-            </select>
-            <label className="label">Map transform</label>
-            <select
-              value={trackingConfig.map_transform}
-              onChange={(e) => handleTrackingChange("map_transform", e.target.value)}
-            >
-              <option value="similarity">Similarity</option>
-              <option value="affine">Affine</option>
-            </select>
-            <label className="label">Anchor transform</label>
-            <select
-              value={trackingConfig.default_anchor_transform}
-              onChange={(e) =>
-                handleTrackingChange("default_anchor_transform", e.target.value)
-              }
-            >
-              <option value="similarity">Similarity</option>
-              <option value="affine">Affine</option>
-              <option value="homography">Homography</option>
-            </select>
+          <details className="block collapsible">
+            <summary>Tracking</summary>
+            <div className="trackingRow">
+              <label className="label">Detector</label>
+              <select
+                value={trackingConfig.detector}
+                onChange={(e) => handleTrackingChange("detector", e.target.value)}
+              >
+                <option value="orb">ORB</option>
+                <option value="akaze">AKAZE</option>
+                <option value="sift">SIFT</option>
+              </select>
+            </div>
+            <div className="trackingRow">
+              <label className="label">Transform priority</label>
+              <select
+                value={trackingConfig.transform_priority}
+                onChange={(e) => handleTrackingChange("transform_priority", e.target.value)}
+              >
+                <option value="global_first">Global first</option>
+                <option value="local_first">Local first</option>
+              </select>
+            </div>
+            <div className="trackingRow">
+              <label className="label">Local tracking mode</label>
+              <select
+                value={trackingConfig.local_tracking_mode}
+                onChange={(e) => handleTrackingChange("local_tracking_mode", e.target.value)}
+              >
+                <option value="patch">Patch corners</option>
+                <option value="annotation_transform">Annotation points (transform)</option>
+                <option value="annotation_points">Annotation points (per-point)</option>
+              </select>
+            </div>
+            <div className="trackingRow">
+              <label className="label">Map transform</label>
+              <select
+                value={trackingConfig.map_transform}
+                onChange={(e) => handleTrackingChange("map_transform", e.target.value)}
+              >
+                <option value="similarity">Similarity</option>
+                <option value="affine">Affine</option>
+              </select>
+            </div>
+            <div className="trackingRow">
+              <label className="label">Anchor transform</label>
+              <select
+                value={trackingConfig.default_anchor_transform}
+                onChange={(e) =>
+                  handleTrackingChange("default_anchor_transform", e.target.value)
+                }
+              >
+                <option value="similarity">Similarity</option>
+                <option value="affine">Affine</option>
+                <option value="homography">Homography</option>
+              </select>
+            </div>
             <p className="muted">Changing tracking clears existing annotations.</p>
-          </div>
+          </details>
 
         </section>
 

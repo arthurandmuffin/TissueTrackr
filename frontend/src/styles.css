@@ -82,6 +82,34 @@ body {
   flex-direction: column;
   gap: 8px;
 }
+.collapsible {
+  gap: 8px;
+}
+.collapsible > summary {
+  list-style: none;
+  cursor: pointer;
+  font-size: 15px;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.collapsible > summary::-webkit-details-marker {
+  display: none;
+}
+.collapsible > summary::after {
+  content: "▾";
+  float: right;
+  color: var(--muted);
+  transition: transform 0.2s ease;
+}
+.collapsible[open] > summary::after {
+  transform: rotate(180deg);
+}
+.trackingRow {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
 .block h2 { margin: 0; font-size: 15px; letter-spacing: 0.5px; color: var(--muted); text-transform: uppercase; }
 .label { font-size: 13px; color: var(--muted); }
 input[type="file"], select, input[type="color"] {
