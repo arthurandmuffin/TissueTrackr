@@ -2,7 +2,7 @@ import base64
 import json
 from typing import Dict
 
-from fastapi import FastAPI, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocketDisconnect, HTTPException, WebSocket
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 import cv2
@@ -61,7 +61,7 @@ async def _broadcast_frame(frame, frame_state):
             active_clients.pop(websocket, None)
 
 @app.websocket("/ws/incoming-stream")
-async def websocket_incoming_stream(websocket):
+async def websocket_incoming_stream(websocket: WebSocket):
     """
     WebSocket endpoint for receiving incoming video streams.
     
@@ -112,7 +112,7 @@ async def websocket_incoming_stream(websocket):
         await websocket.close()
 
 @app.websocket("/ws/outgoing-stream")
-async def websocket_outgoing_stream(websocket):
+async def websocket_outgoing_stream(websocket: WebSocket):
     """
     WebSocket endpoint for sending processed video streams to clients.
     
