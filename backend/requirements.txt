@@ -17,3 +17,5 @@ uvicorn==0.40.0
 uvloop==0.22.1
 watchfiles==1.1.1
 websockets==16.0
+opencv-python==4.11.0.86
+numpy==1.26.4
