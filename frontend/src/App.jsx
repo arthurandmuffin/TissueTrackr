@@ -1,0 +1,594 @@
+import React, { useEffect, useRef, useState } from "react";
+
+const WS_BASE = import.meta.env.VITE_WS_BASE || "ws://localhost:8000";
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+
+export default function App() {
+  const [videoURL, setVideoURL] = useState("");
+  const [streaming, setStreaming] = useState(false);
+  const [frameId, setFrameId] = useState(null);
+  const [landmarks, setLandmarks] = useState([]);
+  const [color, setColor] = useState("#ff5252");
+  const [mode, setMode] = useState("draw");
+  const [eraserSize, setEraserSize] = useState(18);
+  const [strokes, setStrokes] = useState([]);
+  const [status, setStatus] = useState({
+    incoming: "idle",
+    outgoing: "idle",
+  });
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [hasPending, setHasPending] = useState(false);
+  const [isSending, setIsSending] = useState(false);
+  const [showPlaybackHint, setShowPlaybackHint] = useState(false);
+  const [lastPlaybackAction, setLastPlaybackAction] = useState("pause");
+
+  const videoRef = useRef(null);
+  const captureCanvasRef = useRef(null);
+  const overlayRef = useRef(null);
+  const incomingRef = useRef(null);
+  const outgoingRef = useRef(null);
+  const timerRef = useRef(null);
+  const drawingRef = useRef(false);
+  const currentStrokeRef = useRef([]);
+  const currentStrokeColorRef = useRef("#ff5252");
+  const hintTimerRef = useRef(null);
+
+  useEffect(() => {
+    resizeOverlay();
+    drawOverlay();
+  }, [landmarks, strokes, color, videoURL]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      resizeOverlay();
+      drawOverlay();
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  useEffect(() => {
+    if (videoURL && !streaming) {
+      connectSockets();
+    }
+  }, [videoURL]);
+
+  const handleFileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    setVideoURL(url);
+    setStrokes([]);
+    setIsPlaying(false);
+    setHasPending(false);
+    drawingRef.current = false;
+    currentStrokeRef.current = [];
+    currentStrokeColorRef.current = color;
+  };
+
+  const connectSockets = () => {
+    if (!videoURL) {
+      alert("Select a video first.");
+      return;
+    }
+    disconnectSockets();
+
+    const incoming = new WebSocket(`${WS_BASE}/ws/incoming-stream`);
+    const outgoing = new WebSocket(`${WS_BASE}/ws/outgoing-stream`);
+    incoming.binaryType = "arraybuffer";
+    incoming.onopen = () => setStatus((s) => ({ ...s, incoming: "connected" }));
+    incoming.onclose = () => setStatus((s) => ({ ...s, incoming: "closed" }));
+    incoming.onerror = () => setStatus((s) => ({ ...s, incoming: "error" }));
+    outgoing.onopen = () => {
+      setStatus((s) => ({ ...s, outgoing: "connected" }));
+      outgoing.send(JSON.stringify({ include_frame: true }));
+    };
+    outgoing.onclose = () => setStatus((s) => ({ ...s, outgoing: "closed" }));
+    outgoing.onerror = () => setStatus((s) => ({ ...s, outgoing: "error" }));
+    outgoing.onmessage = handleOutgoingMessage;
+
+    incomingRef.current = incoming;
+    outgoingRef.current = outgoing;
+    startFramePump();
+    setStreaming(true);
+  };
+
+  const disconnectSockets = () => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = null;
+    if (incomingRef.current) incomingRef.current.close();
+    if (outgoingRef.current) outgoingRef.current.close();
+    incomingRef.current = null;
+    outgoingRef.current = null;
+    setStreaming(false);
+    setFrameId(null);
+    setLandmarks([]);
+    setStrokes([]);
+    setHasPending(false);
+    drawingRef.current = false;
+    currentStrokeRef.current = [];
+    currentStrokeColorRef.current = color;
+  };
+
+  const startFramePump = () => {
+    const canvas = captureCanvasRef.current;
+    const video = videoRef.current;
+    if (!canvas || !video) return;
+
+    const ctx = canvas.getContext("2d");
+    timerRef.current = setInterval(() => {
+      if (!incomingRef.current || incomingRef.current.readyState !== WebSocket.OPEN) return;
+      if (video.paused || video.ended) return;
+      const { videoWidth, videoHeight } = video;
+      if (!videoWidth || !videoHeight) return;
+      canvas.width = videoWidth;
+      canvas.height = videoHeight;
+      ctx.drawImage(video, 0, 0, videoWidth, videoHeight);
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) return;
+          blob.arrayBuffer().then((buf) => {
+            if (incomingRef.current?.readyState === WebSocket.OPEN) {
+              incomingRef.current.send(buf);
+            }
+          });
+        },
+        "image/jpeg",
+        0.8
+      );
+    }, 120);
+  };
+
+  const handleOutgoingMessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      setFrameId(data.frame_id || null);
+      setLandmarks(data.global_landmarks || []);
+      drawOverlay();
+    } catch (err) {
+      console.error("Failed to parse message", err);
+    }
+  };
+
+  const resizeOverlay = () => {
+    const video = videoRef.current;
+    const overlay = overlayRef.current;
+    if (!video || !overlay) return;
+    const rect = video.getBoundingClientRect();
+    overlay.width = rect.width;
+    overlay.height = rect.height;
+    overlay.style.width = `${rect.width}px`;
+    overlay.style.height = `${rect.height}px`;
+  };
+
+  const getScale = () => {
+    const video = videoRef.current;
+    const overlay = overlayRef.current;
+    if (!video || !overlay || !video.videoWidth || !video.videoHeight) {
+      return { scaleX: 1, scaleY: 1 };
+    }
+    return {
+      scaleX: overlay.width / video.videoWidth,
+      scaleY: overlay.height / video.videoHeight,
+    };
+  };
+
+  const getImageSpacePoint = (clientX, clientY) => {
+    const overlay = overlayRef.current;
+    const video = videoRef.current;
+    if (!overlay || !video) return null;
+    const rect = overlay.getBoundingClientRect();
+    const { scaleX, scaleY } = getScale();
+    if (!scaleX || !scaleY) return null;
+    return {
+      x: (clientX - rect.left) / scaleX,
+      y: (clientY - rect.top) / scaleY,
+    };
+  };
+
+  const drawOverlay = () => {
+    const overlay = overlayRef.current;
+    const ctx = overlay?.getContext("2d");
+    if (!overlay || !ctx) return;
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+    const { scaleX, scaleY } = getScale();
+
+    ctx.fillStyle = "rgba(6, 182, 212, 0.8)";
+    landmarks.forEach((lm) => {
+      ctx.beginPath();
+      ctx.arc(lm.x * scaleX, lm.y * scaleY, 4, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    const allStrokes = [
+      ...strokes,
+      currentStrokeRef.current.length
+        ? { points: currentStrokeRef.current, color: currentStrokeColorRef.current }
+        : null,
+    ].filter(Boolean);
+    allStrokes.forEach((stroke) => {
+      if (!stroke.points.length) return;
+      ctx.strokeStyle = stroke.color || color;
+      ctx.beginPath();
+      stroke.points.forEach((pt, idx) => {
+        const x = pt.x * scaleX;
+        const y = pt.y * scaleY;
+        if (idx === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    });
+
+  };
+
+  const handleOverlayClick = (e) => {
+    e.preventDefault();
+    if (mode === "still") {
+      togglePlay();
+    }
+  };
+
+  const eraserCursor = () => {
+    const size = Math.max(24, Math.min(80, Math.round(eraserSize * 2)));
+    const stroke = Math.max(2, Math.round(size / 14));
+    const center = size / 2;
+    const radius = Math.max(4, center - stroke);
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='${size}' height='${size}' viewBox='0 0 ${size} ${size}'><circle cx='${center}' cy='${center}' r='${radius}' fill='none' stroke='#ffffff' stroke-width='${stroke}' /></svg>`;
+    let encoded = "";
+    try {
+      encoded = `data:image/svg+xml;base64,${btoa(svg)}`;
+    } catch {
+      encoded = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+    }
+    const url = `url("${encoded}") ${Math.round(center)} ${Math.round(center)}, crosshair`;
+    return url;
+  };
+
+  const handlePointerDown = (e) => {
+    if (e.button !== 0 && e.pointerType !== "touch") return;
+    if (mode === "still") return;
+    const video = videoRef.current;
+    if (video && !video.paused) {
+      video.pause();
+      setIsPlaying(false);
+    }
+    const point = getImageSpacePoint(e.clientX, e.clientY);
+    if (!point) return;
+    if (mode === "draw") {
+      drawingRef.current = true;
+      currentStrokeRef.current = [point];
+      currentStrokeColorRef.current = color;
+      setHasPending(true);
+      drawOverlay();
+      return;
+    }
+    if (mode === "erase") {
+      drawingRef.current = true;
+      eraseAtPoint(point);
+      drawOverlay();
+    }
+  };
+
+  const handlePointerMove = (e) => {
+    if (mode === "still") return;
+    if (!drawingRef.current) return;
+    const point = getImageSpacePoint(e.clientX, e.clientY);
+    if (!point) return;
+    if (mode === "draw") {
+      currentStrokeRef.current.push(point);
+      drawOverlay();
+      return;
+    }
+    if (mode === "erase") {
+      eraseAtPoint(point);
+      drawOverlay();
+    }
+  };
+
+  const handlePointerUp = () => {
+    if (!drawingRef.current) return;
+    drawingRef.current = false;
+    if (mode === "draw" && currentStrokeRef.current.length) {
+      const stroke = {
+        points: currentStrokeRef.current,
+        color: currentStrokeColorRef.current,
+      };
+      setStrokes((prev) => [...prev, stroke]);
+      setHasPending(true);
+    }
+    currentStrokeRef.current = [];
+    drawOverlay();
+  };
+
+  const handlePointerLeave = () => {
+    drawingRef.current = false;
+    drawOverlay();
+  };
+
+  const togglePlay = async () => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (hasPending) {
+      alert("Send or cancel the current annotation before playing.");
+      return;
+    }
+    try {
+      if (video.paused) {
+        await video.play();
+        setIsPlaying(true);
+        setLastPlaybackAction("play");
+      } else {
+        video.pause();
+        setIsPlaying(false);
+        setLastPlaybackAction("pause");
+      }
+      showPlaybackOverlay();
+    } catch (err) {
+      alert("Could not play the video. Try clicking the video once, then Play.");
+    }
+  };
+
+  const showPlaybackOverlay = () => {
+    setShowPlaybackHint(true);
+    if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
+    hintTimerRef.current = setTimeout(() => {
+      setShowPlaybackHint(false);
+    }, 1200);
+  };
+
+  const cancelAnnotation = () => {
+    setStrokes([]);
+    currentStrokeRef.current = [];
+    drawingRef.current = false;
+    setHasPending(false);
+  };
+
+  const eraseAll = () => {
+    setStrokes([]);
+    currentStrokeRef.current = [];
+    drawingRef.current = false;
+    setHasPending(false);
+  };
+
+  const eraseAtPoint = (point) => {
+    const radius = eraserSize;
+    const radiusSq = radius * radius;
+    setStrokes((prev) => {
+      const next = [];
+      let changed = false;
+
+      const segmentIntersectsCircle = (a, b) => {
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        if (dx === 0 && dy === 0) {
+          const ax = a.x - point.x;
+          const ay = a.y - point.y;
+          return ax * ax + ay * ay <= radiusSq;
+        }
+        const t = ((point.x - a.x) * dx + (point.y - a.y) * dy) / (dx * dx + dy * dy);
+        const clamped = Math.max(0, Math.min(1, t));
+        const cx = a.x + clamped * dx;
+        const cy = a.y + clamped * dy;
+        const cxDx = cx - point.x;
+        const cyDy = cy - point.y;
+        return cxDx * cxDx + cyDy * cyDy <= radiusSq;
+      };
+
+      prev.forEach((stroke) => {
+        let segment = [];
+        let lastKept = null;
+        stroke.points.forEach((pt) => {
+          const dx = pt.x - point.x;
+          const dy = pt.y - point.y;
+          const inside = dx * dx + dy * dy <= radiusSq;
+          if (inside) {
+            changed = true;
+            if (segment.length >= 2) {
+              next.push({ points: segment, color: stroke.color });
+            }
+            segment = [];
+            lastKept = null;
+            return;
+          }
+
+          if (lastKept && segmentIntersectsCircle(lastKept, pt)) {
+            changed = true;
+            if (segment.length >= 2) {
+              next.push({ points: segment, color: stroke.color });
+            }
+            segment = [pt];
+            lastKept = pt;
+            return;
+          }
+
+          segment.push(pt);
+          lastKept = pt;
+        });
+        if (segment.length >= 2) {
+          next.push({ points: segment, color: stroke.color });
+        }
+      });
+
+      if (changed) {
+        setHasPending(next.length > 0);
+      }
+      return next;
+    });
+  };
+
+  const sendAnnotation = async () => {
+    if (!frameId) return alert("No frame id yet. Start streaming first.");
+    if (!strokes.length) {
+      return alert("Draw at least one stroke.");
+    }
+    setIsSending(true);
+    const annotationPayloads = strokes.map((stroke) => ({
+      geometry_type: "polyline",
+      points: stroke.points.map((p) => ({ x: p.x, y: p.y })),
+      metadata: { color: stroke.color || color },
+    }));
+    const payload = {
+      frame_id: frameId,
+      annotations: annotationPayloads,
+    };
+    try {
+      const res = await fetch(`${API_BASE}/annotations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      await res.json();
+      setStrokes([]);
+      setHasPending(false);
+      drawingRef.current = false;
+      currentStrokeRef.current = [];
+      currentStrokeColorRef.current = color;
+      alert("Annotation sent");
+    } catch (err) {
+      alert(`Failed to send annotation: ${err.message}`);
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  return (
+    <div className="app">
+      <header className="top">
+        <div>
+          <h1>TissueTrackr React Annotator</h1>
+          <p>Upload a video, stream frames, view landmarks, draw and send annotations.</p>
+        </div>
+        <div className="status">
+          <span>Incoming: {status.incoming}</span>
+          <span>Outgoing: {status.outgoing}</span>
+          <span>Frame: {frameId || "-"}</span>
+          <span>Landmarks: {landmarks.length}</span>
+        </div>
+      </header>
+
+      <main className="layout">
+        <section className="panel">
+          <div className="block">
+            <h2>Video</h2>
+            <label className="label">Select a video file</label>
+            <input type="file" accept="video/*" onChange={handleFileChange} />
+            <div className="row">
+              <button onClick={togglePlay} disabled={!videoURL || hasPending}>
+                {isPlaying ? "Pause" : "Play"}
+              </button>
+            </div>
+          </div>
+
+          <div className="block">
+            <h2>Annotation</h2>
+            <label className="label">Stroke color</label>
+            <input type="color" value={color} onChange={(e) => setColor(e.target.value)} />
+            <label className="label">Mode</label>
+            <div className="row">
+              <button
+                type="button"
+                className={mode === "draw" ? "" : "ghost"}
+                onClick={() => setMode("draw")}
+              >
+                Draw
+              </button>
+              <button
+                type="button"
+                className={mode === "still" ? "" : "ghost"}
+                onClick={() => setMode("still")}
+              >
+                Still
+              </button>
+              <button
+                type="button"
+                className={mode === "erase" ? "" : "ghost"}
+                onClick={() => setMode("erase")}
+              >
+                Erase
+              </button>
+              <button type="button" className="ghost" onClick={eraseAll}>
+                Erase all
+              </button>
+            </div>
+            {mode === "erase" && (
+              <>
+                <label className="label">Eraser size</label>
+                <input
+                  type="range"
+                  min="6"
+                  max="48"
+                  value={eraserSize}
+                  onChange={(e) => setEraserSize(Number(e.target.value))}
+                />
+              </>
+            )}
+            <p className="muted">Draw: drag to sketch. Still: no drawing. Erase: drag over strokes to remove them.</p>
+          </div>
+        </section>
+
+        <section className="viewer">
+          <div className="frameShell">
+            <video
+              ref={videoRef}
+              src={videoURL}
+              playsInline
+              onPlay={resizeOverlay}
+              onLoadedMetadata={resizeOverlay}
+              onPause={() => {
+                setIsPlaying(false);
+                setLastPlaybackAction("pause");
+                showPlaybackOverlay();
+              }}
+              onPlayCapture={() => {
+                setIsPlaying(true);
+                setLastPlaybackAction("play");
+                showPlaybackOverlay();
+              }}
+            />
+            <canvas
+              ref={overlayRef}
+              id="overlay"
+              className={`overlay ${mode}`}
+              style={mode === "erase" ? { cursor: eraserCursor() } : undefined}
+              onClick={handleOverlayClick}
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerLeave={handlePointerLeave}
+            ></canvas>
+            <div className="badge">
+              {streaming ? `Frame ${frameId || "-"} • ${landmarks.length} landmarks` : "Waiting..."}
+            </div>
+            {hasPending && (
+              <div className="actionBar">
+                <button onClick={sendAnnotation} disabled={!streaming || isSending}>
+                  {isSending ? "Saving..." : "Save annotation"}
+                </button>
+                <button className="ghost" type="button" onClick={cancelAnnotation} disabled={isSending}>
+                  Cancel
+                </button>
+              </div>
+            )}
+            {showPlaybackHint && (
+              <button
+                type="button"
+                className="playbackHint"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  togglePlay();
+                }}
+              >
+                {lastPlaybackAction === "play" ? "❚❚" : "▶"}
+              </button>
+            )}
+          </div>
+          <canvas ref={captureCanvasRef} style={{ display: "none" }}></canvas>
+        </section>
+      </main>
+    </div>
+  );
+}
