@@ -103,6 +103,10 @@ class AnnotationsIn(BaseModel):
     timestamp: Optional[datetime] = None
 
 
+class FramePinRequest(BaseModel):
+    frame_id: str
+
+
 class FrameState(BaseModel):
     frame_id: str
     timestamp: datetime

@@ -28,6 +28,7 @@ export default function App() {
   const currentStrokeColorRef = useRef("#ff5252");
   const hintTimerRef = useRef(null);
   const isPlayingRef = useRef(false);
+  const pinnedFrameIdRef = useRef(null);
 
   useEffect(() => {
     resizeOverlay();
@@ -200,6 +201,8 @@ export default function App() {
     if (mode === "still") return;
     if (isPlayingRef.current) {
       togglePlay();
+    } else {
+      void pinCurrentFrame();
     }
     const point = getImageSpacePoint(e.clientX, e.clientY);
     if (!point) return;
@@ -266,8 +269,43 @@ export default function App() {
     setLastPlaybackAction(next ? "play" : "pause");
     if (next) {
       setSavedStrokes([]);
+      void unpinCurrentFrame();
+    } else {
+      void pinCurrentFrame();
     }
     showPlaybackOverlay();
+  };
+
+  const pinCurrentFrame = async () => {
+    if (!frameId || pinnedFrameIdRef.current === frameId) return;
+    try {
+      const res = await fetch(`${API_BASE}/frames/pin`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ frame_id: frameId }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      pinnedFrameIdRef.current = frameId;
+    } catch (err) {
+      console.error("Failed to pin frame", err);
+    }
+  };
+
+  const unpinCurrentFrame = async () => {
+    const pinned = pinnedFrameIdRef.current;
+    if (!pinned) return;
+    try {
+      const res = await fetch(`${API_BASE}/frames/unpin`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ frame_id: pinned }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+    } catch (err) {
+      console.error("Failed to unpin frame", err);
+    } finally {
+      pinnedFrameIdRef.current = null;
+    }
   };
 
   const showPlaybackOverlay = () => {

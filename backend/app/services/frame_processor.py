@@ -225,6 +225,7 @@ class FrameProcessor:
         frame: np.ndarray,
         new_landmarks: bool,
         total_landmarks: int,
+        frame_id: Optional[str] = None,
         origin: Tuple[int, int] = (10, 55),
     ) -> np.ndarray:
         output_frame = frame.copy()
@@ -242,6 +243,15 @@ class FrameProcessor:
             output_frame,
             f"Map Landmarks: {total_landmarks}",
             (x0, y0 + 25),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (0, 255, 0),
+            2,
+        )
+        cv2.putText(
+            output_frame,
+            f"Frame ID: {frame_id}",
+            (x0, y0 + 100),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.8,
             (0, 255, 0),

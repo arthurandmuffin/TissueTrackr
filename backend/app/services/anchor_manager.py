@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Deque, Dict, List, Optional, Set, Tuple
 from uuid import uuid4
 
 import cv2
@@ -76,6 +77,14 @@ class MapState:
         return value
 
 
+@dataclass
+class FrameSnapshot:
+    frame_id: str
+    gray: np.ndarray
+    landmarks: List[Landmark]
+    map_transform: Optional[np.ndarray]
+
+
 class AnchorManager:
     def __init__(
         self,
@@ -94,6 +103,7 @@ class AnchorManager:
         map_match_ratio: float = 0.85,
         allow_new_landmarks: bool = True,
         freeze_new_landmarks_after_frames: Optional[int] = 600,
+        frame_cache_size: int = 180,
     ):
         self.frame_processor = FrameProcessor(
             max_features=max_features,
@@ -117,16 +127,22 @@ class AnchorManager:
         self.lost_frames = 0
         self.last_map_transform: Optional[np.ndarray] = None
         self.frame_index = 0
+        self.last_frame_id: Optional[str] = None
         self.prev_gray: Optional[np.ndarray] = None
         self.last_frame: Optional[np.ndarray] = None
         self.last_landmarks: List[Landmark] = []
         self.annotations: Dict[str, AnnotationState] = {}
+        self.frame_cache_size = frame_cache_size
+        self.frame_cache_order: Deque[str] = deque()
+        self.frame_cache: Dict[str, FrameSnapshot] = {}
+        self.pinned_frames: Dict[str, FrameSnapshot] = {}
 
     def render_frame(
         self,
         frame: np.ndarray,
         landmarks: List[Landmark],
         annotations: Optional[List[AnnotationRecord]] = None,
+        frame_id: Optional[str] = None,
     ) -> np.ndarray:
         output_frame = frame.copy()
         total_landmarks = 0
@@ -136,6 +152,7 @@ class AnchorManager:
             output_frame,
             self._should_allow_new_landmarks(),
             total_landmarks,
+            frame_id,
         )
         if self.render_landmarks:
             output_frame = self.frame_processor.draw_landmarks(
@@ -177,6 +194,19 @@ class AnchorManager:
         self.prev_gray = gray
         self.last_frame = frame
         self.last_landmarks = landmarks
+        self.last_frame_id = frame_id
+        self._cache_snapshot(
+            FrameSnapshot(
+                frame_id=frame_id,
+                gray=gray.copy(),
+                landmarks=landmarks,
+                map_transform=(
+                    self.last_map_transform.copy()
+                    if self.last_map_transform is not None
+                    else None
+                ),
+            )
+        )
 
         return FrameState(
             frame_id=frame_id,
@@ -184,6 +214,40 @@ class AnchorManager:
             landmarks=landmarks,
             annotations=[state.record for state in self.annotations.values()],
         )
+
+    def _cache_snapshot(self, snapshot: FrameSnapshot) -> None:
+        if self.frame_cache_size <= 0:
+            return
+        if snapshot.frame_id in self.pinned_frames:
+            return
+        if snapshot.frame_id in self.frame_cache:
+            self.frame_cache[snapshot.frame_id] = snapshot
+            return
+        if len(self.frame_cache_order) >= self.frame_cache_size:
+            oldest_id = self.frame_cache_order.popleft()
+            self.frame_cache.pop(oldest_id, None)
+        self.frame_cache_order.append(snapshot.frame_id)
+        self.frame_cache[snapshot.frame_id] = snapshot
+
+    def _get_snapshot(self, frame_id: Optional[str]) -> Optional[FrameSnapshot]:
+        if frame_id is None:
+            return None
+        if frame_id in self.pinned_frames:
+            return self.pinned_frames[frame_id]
+        return self.frame_cache.get(frame_id)
+
+    def pin_frame(self, frame_id: str) -> None:
+        if frame_id in self.pinned_frames:
+            return
+        snapshot = self.frame_cache.pop(frame_id, None)
+        if snapshot is None:
+            raise ValueError(f"Frame {frame_id} not in cache.")
+        if frame_id in self.frame_cache_order:
+            self.frame_cache_order.remove(frame_id)
+        self.pinned_frames[frame_id] = snapshot
+
+    def unpin_frame(self, frame_id: str) -> None:
+        self.pinned_frames.pop(frame_id, None)
 
     def set_allow_new_landmarks(self, enabled: bool) -> None:
         self.allow_new_landmarks = bool(enabled)
@@ -205,6 +269,7 @@ class AnchorManager:
     ) -> Tuple[List[Landmark], Dict[str, Tuple[float, float]]]:
         if descriptors is None or len(keypoints) == 0:
             self.lost_frames = min(self.map_lost_threshold, self.lost_frames + 1)
+            self.last_map_transform = None
             return [], {}
 
         if self.map_state is None or not self.map_state.landmarks:
@@ -213,6 +278,7 @@ class AnchorManager:
         match = self._match_map(self.map_state, keypoints, descriptors)
         if match is None:
             self.lost_frames = min(self.map_lost_threshold, self.lost_frames + 1)
+            self.last_map_transform = None
             return [], {}
         else:
             self.lost_frames = 0
@@ -396,25 +462,47 @@ class AnchorManager:
         return float(x_new), float(y_new)
 
     def register_annotations(self, payload: AnnotationsIn) -> List[AnnotationRecord]:
-        if self.last_frame is None:
+        snapshot = self._get_snapshot(payload.frame_id)
+        if payload.frame_id and snapshot is None:
+            raise ValueError("Frame not found in cache or pinned storage.")
+        if snapshot is None and self.last_frame is None:
             raise ValueError("No frame available for anchor binding yet.")
 
         frame_id = payload.frame_id or f"frame-{self.frame_index}"
+        is_current_frame = frame_id == self.last_frame_id
+        gray_for_local = snapshot.gray if snapshot else None
+        if gray_for_local is None and self.last_frame is not None:
+            gray_for_local = cv2.cvtColor(self.last_frame, cv2.COLOR_BGR2GRAY)
+        landmarks_for_global = (
+            snapshot.landmarks if snapshot is not None else self.last_landmarks
+        )
+        if snapshot is not None:
+            map_keyframe_transform = (
+                snapshot.map_transform.copy()
+                if snapshot.map_transform is not None
+                else None
+            )
+        else:
+            map_keyframe_transform = (
+                self.last_map_transform.copy()
+                if self.last_map_transform is not None
+                else None
+            )
         created: List[AnnotationRecord] = []
         for annotation in payload.annotations:
             record = self._build_annotation_record(frame_id, annotation)
             local_anchor, local_state = self._build_local_anchor(
-                record, annotation.local_hint
+                record,
+                annotation.local_hint,
+                gray_for_local if is_current_frame else None,
             )
             global_anchor, global_state = self._build_global_anchor(
-                record, annotation.global_hint
+                record,
+                annotation.global_hint,
+                landmarks_for_global,
             )
             record.local_anchor = local_anchor
             record.global_anchor = global_anchor
-
-            map_keyframe_transform = None
-            if self.last_map_transform is not None:
-                map_keyframe_transform = self.last_map_transform.copy()
 
             self.annotations[record.id] = AnnotationState(
                 record=record,
@@ -445,9 +533,12 @@ class AnchorManager:
         )
 
     def _build_local_anchor(
-        self, record: AnnotationRecord, hint: Optional[LocalAnchorHint]
+        self,
+        record: AnnotationRecord,
+        hint: Optional[LocalAnchorHint],
+        gray_frame: Optional[np.ndarray],
     ) -> Tuple[Optional[LocalAnchor], Optional[LocalAnchorState]]:
-        if self.last_frame is None or not record.points:
+        if gray_frame is None or not record.points:
             return None, None
 
         transform_type = hint.transform_type if hint and hint.transform_type else TransformType.similarity
@@ -455,9 +546,8 @@ class AnchorManager:
         radius = int(max(64, min(128, radius)))
 
         center = self._centroid(record.points)
-        gray = cv2.cvtColor(self.last_frame, cv2.COLOR_BGR2GRAY)
-        x0, y0, x1, y1 = self._patch_bounds(center, radius, gray.shape)
-        roi = gray[y0:y1, x0:x1]
+        x0, y0, x1, y1 = self._patch_bounds(center, radius, gray_frame.shape)
+        roi = gray_frame[y0:y1, x0:x1]
 
         keyframe_points = self._detect_patch_points(roi, x0, y0)
         if keyframe_points.size == 0:
@@ -479,9 +569,12 @@ class AnchorManager:
         return local_anchor, state
 
     def _build_global_anchor(
-        self, record: AnnotationRecord, hint: Optional[GlobalAnchorHint]
+        self,
+        record: AnnotationRecord,
+        hint: Optional[GlobalAnchorHint],
+        landmarks: List[Landmark],
     ) -> Tuple[Optional[GlobalAnchor], Optional[GlobalAnchorState]]:
-        if not self.last_landmarks or not record.points:
+        if not landmarks or not record.points:
             return None, None
 
         transform_type = hint.transform_type if hint and hint.transform_type else TransformType.similarity
@@ -489,9 +582,9 @@ class AnchorManager:
         k_nearest = max(6, min(20, int(k_nearest)))
 
         center = self._centroid(record.points)
-        candidates = [lm for lm in self.last_landmarks if lm.age >= self.min_landmark_age]
+        candidates = [lm for lm in landmarks if lm.age >= self.min_landmark_age]
         if not candidates:
-            candidates = self.last_landmarks
+            candidates = landmarks
 
         sorted_landmarks = sorted(
             candidates,

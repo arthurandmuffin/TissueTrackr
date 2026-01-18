@@ -10,7 +10,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 import cv2
 import numpy as np
-from .models import AnnotationsIn
+from .models import AnnotationsIn, FramePinRequest
 from .services.anchor_manager import AnchorManager
 
 app = FastAPI(title="TissueTrackr Backend")
@@ -54,7 +54,7 @@ async def _broadcast_frame(frame, frame_state):
     frame_payload = None
     if include_frame:
         output_frame = anchor_manager.render_frame(
-            frame, frame_state.landmarks, frame_state.annotations
+            frame, frame_state.landmarks, frame_state.annotations, frame_state.frame_id
         )
         ok, buffer = cv2.imencode(".jpg", output_frame)
         if ok:
@@ -191,6 +191,19 @@ async def receive_annotations(payload: AnnotationsIn):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error receiving annotations: {str(e)}")
+
+@app.post("/frames/pin")
+async def pin_frame(payload: FramePinRequest):
+    try:
+        anchor_manager.pin_frame(payload.frame_id)
+        return JSONResponse({"success": True, "frame_id": payload.frame_id})
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.post("/frames/unpin")
+async def unpin_frame(payload: FramePinRequest):
+    anchor_manager.unpin_frame(payload.frame_id)
+    return JSONResponse({"success": True, "frame_id": payload.frame_id})
 
 
 @app.delete("/annotations")
