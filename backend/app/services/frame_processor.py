@@ -157,7 +157,7 @@ class FrameProcessor:
             if coords.size == 0:
                 continue
 
-            color = (255, 140, 0)
+            color = self._annotation_color(annotation.metadata)
             thickness = 2
             if annotation.geometry_type == GeometryType.point:
                 x, y = int(coords[0][0]), int(coords[0][1])
@@ -181,6 +181,23 @@ class FrameProcessor:
                 cv2.circle(output_frame, (x, y), 6, color, -1)
 
         return output_frame
+
+    def _annotation_color(self, metadata: Dict) -> Tuple[int, int, int]:
+        raw = metadata.get("color") if metadata else None
+        if not isinstance(raw, str):
+            return (255, 140, 0)
+        value = raw.strip()
+        if value.startswith("#"):
+            value = value[1:]
+        if len(value) != 6:
+            return (255, 140, 0)
+        try:
+            r = int(value[0:2], 16)
+            g = int(value[2:4], 16)
+            b = int(value[4:6], 16)
+        except ValueError:
+            return (255, 140, 0)
+        return (b, g, r)
 
     def _apply_transform(
         self,

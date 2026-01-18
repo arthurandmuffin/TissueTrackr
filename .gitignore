@@ -11,3 +11,4 @@ coverage/
 .vscode/
 *.log
 package-lock.json
+videos/

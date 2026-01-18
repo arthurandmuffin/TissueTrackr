@@ -412,6 +412,11 @@ class AnchorManager:
             created.append(record)
         return created
 
+    def clear_annotations(self) -> int:
+        count = len(self.annotations)
+        self.annotations.clear()
+        return count
+
     def _build_annotation_record(
         self, frame_id: str, annotation: AnnotationCreate
     ) -> AnnotationRecord:

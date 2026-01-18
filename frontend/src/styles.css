@@ -175,16 +175,23 @@ button.danger { background: var(--danger); color: #0f0b12; }
   box-shadow: 0 10px 30px rgba(0,0,0,0.45);
   cursor: pointer;
 }
-video {
+.frameImage {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: #0c1427;
 }
-.frameShell video {
+.frameShell .frameImage {
   width: 100%;
   display: block;
   border: none;
   border-radius: 0;
   background: #0c1427;
+}
+.framePlaceholder {
+  display: grid;
+  place-items: center;
+  min-height: 320px;
+  color: var(--muted);
+  font-size: 14px;
 }
