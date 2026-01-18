@@ -403,6 +403,8 @@ export default function App() {
       currentStrokeRef.current = [];
       drawingRef.current = false;
       setHasPending(false);
+      setIsPlaying(true);
+      isPlayingRef.current = true;
     } catch (err) {
       setToast(`Failed to clear annotations: ${err.message}`, "error");
     }
@@ -551,6 +553,68 @@ export default function App() {
             </div>
           </div>
 
+                    <div className="block">
+            <h2>Annotation</h2>
+            <label className="label">Stroke color</label>
+            <input type="color" value={color} onChange={(e) => setColor(e.target.value)} />
+            <label className="label">Mode</label>
+            <div className="row">
+              <button
+                type="button"
+                className={mode === "draw" ? "" : "ghost"}
+                onClick={() => setMode("draw")}
+              >
+                Draw
+              </button>
+              <button
+                type="button"
+                className={mode === "still" ? "" : "ghost"}
+                onClick={() => setMode("still")}
+              >
+                Still
+              </button>
+              <button
+                type="button"
+                className={mode === "erase" ? "" : "ghost"}
+                onClick={() => setMode("erase")}
+              >
+                Erase
+              </button>
+              <button type="button" className="ghost" onClick={deleteAll}>
+                Delete All
+              </button>
+            </div>
+            {mode === "erase" && (
+              <>
+                <label className="label">Eraser size</label>
+                <input
+                  type="range"
+                  min="6"
+                  max="48"
+                  value={eraserSize}
+                  onChange={(e) => setEraserSize(Number(e.target.value))}
+                />
+              </>
+            )}
+            <p className="muted">Draw: drag to sketch. Still: no drawing. Erase: drag over strokes to remove them.</p>
+          </div>
+
+
+          <div className="block">
+            <h2>Tracking Preset</h2>
+            <label className="label">Video Type</label>
+            <select
+              value={trackingConfig.detector}
+              onChange={(e) => handleTrackingChange("detector", e.target.value)}
+            >
+              <option value="echo-cardio">Echo Cardio</option>
+              <option value="lap">Laparoscopy</option>
+              <option value="ultra">Intrapartum</option>
+              <option value="pocus">POCUS</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+
           <div className="block">
             <h2>Tracking</h2>
             <label className="label">Detector</label>
@@ -601,51 +665,6 @@ export default function App() {
             <p className="muted">Changing tracking clears existing annotations.</p>
           </div>
 
-          <div className="block">
-            <h2>Annotation</h2>
-            <label className="label">Stroke color</label>
-            <input type="color" value={color} onChange={(e) => setColor(e.target.value)} />
-            <label className="label">Mode</label>
-            <div className="row">
-              <button
-                type="button"
-                className={mode === "draw" ? "" : "ghost"}
-                onClick={() => setMode("draw")}
-              >
-                Draw
-              </button>
-              <button
-                type="button"
-                className={mode === "still" ? "" : "ghost"}
-                onClick={() => setMode("still")}
-              >
-                Still
-              </button>
-              <button
-                type="button"
-                className={mode === "erase" ? "" : "ghost"}
-                onClick={() => setMode("erase")}
-              >
-                Erase
-              </button>
-              <button type="button" className="ghost" onClick={deleteAll}>
-                Delete All
-              </button>
-            </div>
-            {mode === "erase" && (
-              <>
-                <label className="label">Eraser size</label>
-                <input
-                  type="range"
-                  min="6"
-                  max="48"
-                  value={eraserSize}
-                  onChange={(e) => setEraserSize(Number(e.target.value))}
-                />
-              </>
-            )}
-            <p className="muted">Draw: drag to sketch. Still: no drawing. Erase: drag over strokes to remove them.</p>
-          </div>
         </section>
 
         <section className="viewer">
