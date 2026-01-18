@@ -13,6 +13,7 @@ from ..models import (
     AnnotationCreate,
     AnnotationRecord,
     AnnotationsIn,
+    DetectorType,
     FrameState,
     GlobalAnchor,
     GlobalAnchorHint,
@@ -20,8 +21,12 @@ from ..models import (
     LandmarkBinding,
     LocalAnchor,
     LocalAnchorHint,
+    LocalTrackingMode,
     Point2D,
+    TrackingConfig,
+    TrackingConfigUpdate,
     TransformMatrix,
+    TransformPriority,
     TransformType,
 )
 from .frame_processor import FrameProcessor
@@ -48,7 +53,9 @@ class AnnotationState:
     record: AnnotationRecord
     local_state: Optional[LocalAnchorState]
     global_state: Optional[GlobalAnchorState]
+    reference_gray: Optional[np.ndarray] = None
     map_keyframe_transform: Optional[np.ndarray] = None
+    last_tracked_index: Optional[int] = None
 
 
 @dataclass
@@ -80,6 +87,7 @@ class MapState:
 @dataclass
 class FrameSnapshot:
     frame_id: str
+    frame_index: int
     gray: np.ndarray
     landmarks: List[Landmark]
     map_transform: Optional[np.ndarray]
@@ -103,11 +111,19 @@ class AnchorManager:
         map_match_ratio: float = 0.85,
         allow_new_landmarks: bool = True,
         freeze_new_landmarks_after_frames: Optional[int] = 600,
-        frame_cache_size: int = 180,
+        frame_cache_size: int = 600,
+        detector_type: DetectorType = DetectorType.akaze,
+        transform_priority: TransformPriority = TransformPriority.global_first,
+        local_tracking_mode: LocalTrackingMode = LocalTrackingMode.patch,
+        default_anchor_transform: TransformType = TransformType.similarity,
+        map_transform: TransformType = TransformType.similarity,
     ):
+        if map_transform == TransformType.homography:
+            raise ValueError("Map homography is not supported yet.")
         self.frame_processor = FrameProcessor(
             max_features=max_features,
             max_dimension=max_detection_dimension,
+            detector_type=detector_type,
         )
         self.local_patch_radius = local_patch_radius
         self.local_min_points = local_min_points
@@ -115,6 +131,10 @@ class AnchorManager:
         self.global_k_nearest = global_k_nearest
         self.min_landmark_age = min_landmark_age
         self.render_landmarks = render_landmarks
+        self.transform_priority = transform_priority
+        self.local_tracking_mode = local_tracking_mode
+        self.default_anchor_transform = default_anchor_transform
+        self.map_transform = map_transform
         self.map_max_landmarks = map_max_landmarks
         self.map_max_new_per_frame = map_max_new_per_frame
         self.map_min_inliers = map_min_inliers
@@ -122,7 +142,7 @@ class AnchorManager:
         self.map_match_ratio = map_match_ratio
         self.allow_new_landmarks = allow_new_landmarks
         self.freeze_new_landmarks_after_frames = freeze_new_landmarks_after_frames
-        self.map_matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+        self.map_matcher = self._create_matcher(detector_type)
         self.map_state: Optional[MapState] = None
         self.lost_frames = 0
         self.last_map_transform: Optional[np.ndarray] = None
@@ -136,6 +156,7 @@ class AnchorManager:
         self.frame_cache_order: Deque[str] = deque()
         self.frame_cache: Dict[str, FrameSnapshot] = {}
         self.pinned_frames: Dict[str, FrameSnapshot] = {}
+        self._descriptor_norm = self._norm_for_detector(detector_type)
 
     def render_frame(
         self,
@@ -148,21 +169,70 @@ class AnchorManager:
         total_landmarks = 0
         if self.map_state is not None:
             total_landmarks = len(self.map_state.landmarks)
-        output_frame = self.frame_processor.draw_stats(
-            output_frame,
-            self._should_allow_new_landmarks(),
-            total_landmarks,
-            frame_id,
-        )
-        if self.render_landmarks:
-            output_frame = self.frame_processor.draw_landmarks(
-                output_frame, landmarks
-            )
+        # output_frame = self.frame_processor.draw_stats(
+        #     output_frame,
+        #     self._should_allow_new_landmarks(),
+        #     total_landmarks,
+        #     frame_id,
+        # )
+        # if self.render_landmarks:
+        #     output_frame = self.frame_processor.draw_landmarks(
+        #         output_frame, landmarks
+        #     )
         if annotations:
             output_frame = self.frame_processor.draw_annotations(
-                output_frame, annotations
+                output_frame, annotations, transform_priority=self.transform_priority
             )
         return output_frame
+
+    def get_tracking_config(self) -> TrackingConfig:
+        return TrackingConfig(
+            detector=self.frame_processor.detector_type,
+            transform_priority=self.transform_priority,
+            local_tracking_mode=self.local_tracking_mode,
+            default_anchor_transform=self.default_anchor_transform,
+            map_transform=self.map_transform,
+            map_match_ratio=self.map_match_ratio,
+            map_min_inliers=self.map_min_inliers,
+        )
+
+    def update_tracking_config(self, payload: TrackingConfigUpdate) -> TrackingConfig:
+        changed = False
+        if payload.detector is not None:
+            if payload.detector != self.frame_processor.detector_type:
+                self.frame_processor.set_detector(payload.detector)
+                self._reset_map_state()
+                self._reset_matcher_for_detector(payload.detector)
+                changed = True
+        if payload.transform_priority is not None:
+            if payload.transform_priority != self.transform_priority:
+                self.transform_priority = payload.transform_priority
+                changed = True
+        if payload.local_tracking_mode is not None:
+            if payload.local_tracking_mode != self.local_tracking_mode:
+                self.local_tracking_mode = payload.local_tracking_mode
+                changed = True
+        if payload.default_anchor_transform is not None:
+            if payload.default_anchor_transform != self.default_anchor_transform:
+                self.default_anchor_transform = payload.default_anchor_transform
+                changed = True
+        if payload.map_transform is not None:
+            if payload.map_transform == TransformType.homography:
+                raise ValueError("Map homography is not supported yet.")
+            if payload.map_transform != self.map_transform:
+                self.map_transform = payload.map_transform
+                changed = True
+        if payload.map_match_ratio is not None:
+            if payload.map_match_ratio != self.map_match_ratio:
+                self.map_match_ratio = payload.map_match_ratio
+                changed = True
+        if payload.map_min_inliers is not None:
+            if payload.map_min_inliers != self.map_min_inliers:
+                self.map_min_inliers = payload.map_min_inliers
+                changed = True
+        if changed:
+            self.clear_annotations()
+        return self.get_tracking_config()
 
     def process_frame(self, frame: np.ndarray) -> FrameState:
         self.frame_index += 1
@@ -176,15 +246,71 @@ class AnchorManager:
 
         if self.prev_gray is not None:
             for state in self.annotations.values():
+                reference_snapshot = None
+                reference_gray = None
+                if self.local_tracking_mode != LocalTrackingMode.patch:
+                    reference_snapshot = self._get_snapshot(state.record.frame_id)
+                    if (
+                        reference_snapshot is not None
+                        and reference_snapshot.gray.shape != gray.shape
+                    ):
+                        reference_snapshot = None
+                    if reference_snapshot is None and state.reference_gray is not None:
+                        if state.reference_gray.shape == gray.shape:
+                            reference_gray = state.reference_gray
                 if state.local_state is not None:
-                    state.record.local_transform = self._update_local_anchor(
-                        state.local_state, self.prev_gray, gray
-                    )
+                    if self.local_tracking_mode == LocalTrackingMode.annotation_points:
+                        updated = self._advance_local_points_from_cache(
+                            state, gray, update_record_points=True
+                        )
+                        if not updated:
+                            if reference_snapshot is not None:
+                                self._update_local_points_from_reference(
+                                    state, reference_snapshot.gray, gray
+                                )
+                            elif reference_gray is not None:
+                                self._update_local_points_from_reference(
+                                    state, reference_gray, gray
+                                )
+                            else:
+                                self._update_local_points(
+                                    state, self.prev_gray, gray
+                                )
+                        state.record.local_transform = None
+                    elif self.local_tracking_mode == LocalTrackingMode.annotation_transform:
+                        transform = self._advance_local_transform_from_cache(
+                            state, gray
+                        )
+                        if transform is None:
+                            if reference_snapshot is not None:
+                                transform = self._update_local_transform_from_reference(
+                                    state.local_state,
+                                    reference_snapshot.gray,
+                                    gray,
+                                )
+                            elif reference_gray is not None:
+                                transform = self._update_local_transform_from_reference(
+                                    state.local_state,
+                                    reference_gray,
+                                    gray,
+                                )
+                            else:
+                                transform = self._update_local_anchor(
+                                    state.local_state, self.prev_gray, gray
+                                )
+                        state.record.local_transform = transform
+                    else:
+                        state.record.local_transform = self._update_local_anchor(
+                            state.local_state, self.prev_gray, gray
+                        )
                 if state.global_state is not None:
-                    state.record.global_transform = self._update_global_anchor(
-                        state.global_state, positions
-                    )
-                if (
+                    if self.local_tracking_mode != LocalTrackingMode.annotation_points:
+                        state.record.global_transform = self._update_global_anchor(
+                            state.global_state, positions
+                        )
+                if self.local_tracking_mode == LocalTrackingMode.annotation_points:
+                    state.record.global_transform = None
+                elif (
                     state.record.local_transform is None
                     and state.record.global_transform is None
                 ):
@@ -198,6 +324,7 @@ class AnchorManager:
         self._cache_snapshot(
             FrameSnapshot(
                 frame_id=frame_id,
+                frame_index=self.frame_index,
                 gray=gray.copy(),
                 landmarks=landmarks,
                 map_transform=(
@@ -223,11 +350,9 @@ class AnchorManager:
         if snapshot.frame_id in self.frame_cache:
             self.frame_cache[snapshot.frame_id] = snapshot
             return
-        if len(self.frame_cache_order) >= self.frame_cache_size:
-            oldest_id = self.frame_cache_order.popleft()
-            self.frame_cache.pop(oldest_id, None)
         self.frame_cache_order.append(snapshot.frame_id)
         self.frame_cache[snapshot.frame_id] = snapshot
+        self._prune_frame_cache()
 
     def _get_snapshot(self, frame_id: Optional[str]) -> Optional[FrameSnapshot]:
         if frame_id is None:
@@ -235,6 +360,29 @@ class AnchorManager:
         if frame_id in self.pinned_frames:
             return self.pinned_frames[frame_id]
         return self.frame_cache.get(frame_id)
+
+    def _get_snapshot_by_index(self, frame_index: int) -> Optional[FrameSnapshot]:
+        for snapshot in self.pinned_frames.values():
+            if snapshot.frame_index == frame_index:
+                return snapshot
+        for snapshot in self.frame_cache.values():
+            if snapshot.frame_index == frame_index:
+                return snapshot
+        return None
+
+    def _get_snapshots_between(
+        self, start_index: int, end_index: int
+    ) -> List[FrameSnapshot]:
+        if start_index >= end_index:
+            return []
+        snapshots = list(self.pinned_frames.values()) + list(self.frame_cache.values())
+        filtered = [
+            snap
+            for snap in snapshots
+            if start_index < snap.frame_index < end_index
+        ]
+        filtered.sort(key=lambda snap: snap.frame_index)
+        return filtered
 
     def pin_frame(self, frame_id: str) -> None:
         if frame_id in self.pinned_frames:
@@ -245,9 +393,72 @@ class AnchorManager:
         if frame_id in self.frame_cache_order:
             self.frame_cache_order.remove(frame_id)
         self.pinned_frames[frame_id] = snapshot
+        self._prune_frame_cache()
 
     def unpin_frame(self, frame_id: str) -> None:
         self.pinned_frames.pop(frame_id, None)
+        self._prune_frame_cache()
+
+    def _prune_frame_cache(self) -> None:
+        if self.frame_cache_size <= 0:
+            self.frame_cache_order.clear()
+            self.frame_cache.clear()
+            return
+        min_pinned_index = self._min_pinned_index()
+        if min_pinned_index is None:
+            while len(self.frame_cache_order) > self.frame_cache_size:
+                oldest_id = self.frame_cache_order.popleft()
+                self.frame_cache.pop(oldest_id, None)
+            return
+        # Keep all frames from the earliest pin onward; evict only older frames.
+        pruned = True
+        while pruned:
+            pruned = False
+            for frame_id in list(self.frame_cache_order):
+                snapshot = self.frame_cache.get(frame_id)
+                if snapshot is None:
+                    self.frame_cache_order.remove(frame_id)
+                    pruned = True
+                    break
+                if snapshot.frame_index < min_pinned_index:
+                    self.frame_cache_order.remove(frame_id)
+                    self.frame_cache.pop(frame_id, None)
+                    pruned = True
+                    break
+
+    def _min_pinned_index(self) -> Optional[int]:
+        if not self.pinned_frames:
+            return None
+        return min(snapshot.frame_index for snapshot in self.pinned_frames.values())
+
+    def _reset_map_state(self) -> None:
+        self.map_state = None
+        self.lost_frames = 0
+        self.last_map_transform = None
+        self.last_landmarks = []
+        self.frame_cache_order.clear()
+        self.frame_cache.clear()
+        self.pinned_frames.clear()
+
+    def reset_tracking_state(self) -> None:
+        self.clear_annotations()
+        self._reset_map_state()
+        self.prev_gray = None
+        self.last_frame = None
+        self.last_frame_id = None
+        self.frame_index = 0
+
+    def _norm_for_detector(self, detector_type: DetectorType) -> int:
+        if detector_type == DetectorType.sift:
+            return cv2.NORM_L2
+        return cv2.NORM_HAMMING
+
+    def _create_matcher(self, detector_type: DetectorType) -> cv2.BFMatcher:
+        return cv2.BFMatcher(self._norm_for_detector(detector_type), crossCheck=False)
+
+    def _reset_matcher_for_detector(self, detector_type: DetectorType) -> None:
+        self.map_matcher = self._create_matcher(detector_type)
+        self._descriptor_norm = self._norm_for_detector(detector_type)
 
     def set_allow_new_landmarks(self, enabled: bool) -> None:
         self.allow_new_landmarks = bool(enabled)
@@ -360,12 +571,20 @@ class AnchorManager:
         dst_points = np.array(
             [map_points[m.queryIdx] for m in good_matches], dtype=np.float32
         )
-        matrix, inliers = cv2.estimateAffinePartial2D(
-            src_points,
-            dst_points,
-            method=cv2.RANSAC,
-            ransacReprojThreshold=5.0,
-        )
+        if self.map_transform == TransformType.affine:
+            matrix, inliers = cv2.estimateAffine2D(
+                src_points,
+                dst_points,
+                method=cv2.RANSAC,
+                ransacReprojThreshold=5.0,
+            )
+        else:
+            matrix, inliers = cv2.estimateAffinePartial2D(
+                src_points,
+                dst_points,
+                method=cv2.RANSAC,
+                ransacReprojThreshold=5.0,
+            )
         if matrix is None:
             return None
 
@@ -473,6 +692,8 @@ class AnchorManager:
         gray_for_local = snapshot.gray if snapshot else None
         if gray_for_local is None and self.last_frame is not None:
             gray_for_local = cv2.cvtColor(self.last_frame, cv2.COLOR_BGR2GRAY)
+        if self.local_tracking_mode == LocalTrackingMode.patch and not is_current_frame:
+            gray_for_local = None
         landmarks_for_global = (
             snapshot.landmarks if snapshot is not None else self.last_landmarks
         )
@@ -491,11 +712,18 @@ class AnchorManager:
         created: List[AnnotationRecord] = []
         for annotation in payload.annotations:
             record = self._build_annotation_record(frame_id, annotation)
-            local_anchor, local_state = self._build_local_anchor(
-                record,
-                annotation.local_hint,
-                gray_for_local if is_current_frame else None,
-            )
+            if self.local_tracking_mode == LocalTrackingMode.patch:
+                local_anchor, local_state = self._build_local_anchor(
+                    record,
+                    annotation.local_hint,
+                    gray_for_local,
+                )
+            else:
+                local_anchor, local_state = self._build_local_points_anchor(
+                    record,
+                    annotation.local_hint,
+                    gray_for_local,
+                )
             global_anchor, global_state = self._build_global_anchor(
                 record,
                 annotation.global_hint,
@@ -504,11 +732,21 @@ class AnchorManager:
             record.local_anchor = local_anchor
             record.global_anchor = global_anchor
 
+            tracked_index = None
+            if snapshot is not None:
+                tracked_index = snapshot.frame_index
+            elif self.last_frame_id == frame_id:
+                tracked_index = self.frame_index
+
             self.annotations[record.id] = AnnotationState(
                 record=record,
                 local_state=local_state,
                 global_state=global_state,
+                reference_gray=gray_for_local.copy()
+                if gray_for_local is not None
+                else None,
                 map_keyframe_transform=map_keyframe_transform,
+                last_tracked_index=tracked_index,
             )
             created.append(record)
         return created
@@ -541,7 +779,11 @@ class AnchorManager:
         if gray_frame is None or not record.points:
             return None, None
 
-        transform_type = hint.transform_type if hint and hint.transform_type else TransformType.similarity
+        transform_type = (
+            hint.transform_type
+            if hint and hint.transform_type
+            else self.default_anchor_transform
+        )
         radius = hint.patch_radius if hint and hint.patch_radius else self.local_patch_radius
         radius = int(max(64, min(128, radius)))
 
@@ -568,6 +810,40 @@ class AnchorManager:
         )
         return local_anchor, state
 
+    def _build_local_points_anchor(
+        self,
+        record: AnnotationRecord,
+        hint: Optional[LocalAnchorHint],
+        gray_frame: Optional[np.ndarray],
+    ) -> Tuple[Optional[LocalAnchor], Optional[LocalAnchorState]]:
+        if gray_frame is None or not record.points:
+            return None, None
+
+        transform_type = (
+            hint.transform_type
+            if hint and hint.transform_type
+            else self.default_anchor_transform
+        )
+        center = self._centroid(record.points)
+        points = np.array(
+            [[pt.x, pt.y] for pt in record.points], dtype=np.float32
+        ).reshape(-1, 1, 2)
+
+        local_anchor = LocalAnchor(
+            patch_center=Point2D(x=center[0], y=center[1]),
+            patch_radius=0,
+            keyframe_points=self._points_to_model(points),
+            transform_type=transform_type,
+        )
+        state = LocalAnchorState(
+            keyframe_points=points.copy(),
+            last_points=points.copy(),
+            transform_type=transform_type,
+            patch_center=center,
+            patch_radius=0,
+        )
+        return local_anchor, state
+
     def _build_global_anchor(
         self,
         record: AnnotationRecord,
@@ -577,7 +853,11 @@ class AnchorManager:
         if not landmarks or not record.points:
             return None, None
 
-        transform_type = hint.transform_type if hint and hint.transform_type else TransformType.similarity
+        transform_type = (
+            hint.transform_type
+            if hint and hint.transform_type
+            else self.default_anchor_transform
+        )
         k_nearest = hint.k_nearest if hint and hint.k_nearest else self.global_k_nearest
         k_nearest = max(6, min(20, int(k_nearest)))
 
@@ -643,6 +923,198 @@ class AnchorManager:
             state.keyframe_points.reshape(-1, 2),
             state.last_points.reshape(-1, 2),
             state.transform_type,
+        )
+
+    def _update_local_points(
+        self,
+        state: AnnotationState,
+        prev_gray: np.ndarray,
+        gray: np.ndarray,
+    ) -> None:
+        local_state = state.local_state
+        if local_state is None or local_state.last_points.size == 0:
+            return
+
+        new_points, status, _ = cv2.calcOpticalFlowPyrLK(
+            prev_gray,
+            gray,
+            local_state.last_points,
+            None,
+            winSize=(21, 21),
+            maxLevel=3,
+        )
+        if new_points is None or status is None:
+            return
+
+        mask = status.reshape(-1) == 1
+        updated = local_state.last_points.copy()
+        updated[mask] = new_points[mask]
+        local_state.last_points = updated
+
+        state.record.points = self._points_to_model(updated)
+
+    def _update_local_points_from_reference(
+        self,
+        state: AnnotationState,
+        reference_gray: np.ndarray,
+        gray: np.ndarray,
+    ) -> None:
+        local_state = state.local_state
+        if local_state is None or local_state.keyframe_points.size == 0:
+            return
+
+        new_points, status, _ = cv2.calcOpticalFlowPyrLK(
+            reference_gray,
+            gray,
+            local_state.keyframe_points,
+            None,
+            winSize=(21, 21),
+            maxLevel=3,
+        )
+        if new_points is None or status is None:
+            return
+
+        mask = status.reshape(-1) == 1
+        updated = local_state.last_points.copy()
+        if updated.shape != new_points.shape:
+            updated = new_points.copy()
+        updated[mask] = new_points[mask]
+        local_state.last_points = updated
+        state.record.points = self._points_to_model(updated)
+
+    def _track_points(
+        self, prev_gray: np.ndarray, gray: np.ndarray, points: np.ndarray
+    ) -> np.ndarray:
+        new_points, status, _ = cv2.calcOpticalFlowPyrLK(
+            prev_gray,
+            gray,
+            points,
+            None,
+            winSize=(21, 21),
+            maxLevel=3,
+        )
+        if new_points is None or status is None:
+            return points
+        mask = status.reshape(-1) == 1
+        updated = points.copy()
+        updated[mask] = new_points[mask]
+        return updated
+
+    def _advance_local_points_from_cache(
+        self,
+        state: AnnotationState,
+        current_gray: np.ndarray,
+        update_record_points: bool,
+    ) -> bool:
+        local_state = state.local_state
+        if local_state is None or local_state.last_points.size == 0:
+            return False
+
+        start_index = state.last_tracked_index
+        start_gray = None
+        points = local_state.last_points
+        if start_index is not None:
+            snapshot = self._get_snapshot_by_index(start_index)
+            if snapshot is not None:
+                start_gray = snapshot.gray
+            elif state.reference_gray is not None:
+                if state.reference_gray.shape == current_gray.shape:
+                    start_gray = state.reference_gray
+                    start_index = None
+                    points = local_state.keyframe_points
+        if start_gray is None and state.reference_gray is not None:
+            if state.reference_gray.shape == current_gray.shape:
+                start_gray = state.reference_gray
+                start_index = None
+                points = local_state.keyframe_points
+
+        if start_gray is None:
+            if self.prev_gray is None:
+                return False
+            start_gray = self.prev_gray
+            start_index = self.frame_index - 1
+
+        if start_index is None:
+            points = self._track_points(start_gray, current_gray, points)
+            local_state.last_points = points
+            state.last_tracked_index = self.frame_index
+            if update_record_points:
+                state.record.points = self._points_to_model(points)
+            return True
+        for snapshot in self._get_snapshots_between(start_index, self.frame_index):
+            points = self._track_points(start_gray, snapshot.gray, points)
+            start_gray = snapshot.gray
+            start_index = snapshot.frame_index
+
+        if start_index != self.frame_index:
+            points = self._track_points(start_gray, current_gray, points)
+            start_index = self.frame_index
+
+        local_state.last_points = points
+        state.last_tracked_index = start_index
+        if update_record_points:
+            state.record.points = self._points_to_model(points)
+        return True
+
+    def _advance_local_transform_from_cache(
+        self,
+        state: AnnotationState,
+        current_gray: np.ndarray,
+    ) -> Optional[TransformMatrix]:
+        if not self._advance_local_points_from_cache(
+            state, current_gray, update_record_points=False
+        ):
+            return None
+        local_state = state.local_state
+        if local_state is None or local_state.keyframe_points.size == 0:
+            return None
+        if local_state.last_points.shape[0] < 4:
+            return self._translation_transform(
+                local_state.keyframe_points, local_state.last_points
+            )
+        return self._estimate_transform(
+            local_state.keyframe_points.reshape(-1, 2),
+            local_state.last_points.reshape(-1, 2),
+            local_state.transform_type,
+        )
+
+    def _update_local_transform_from_reference(
+        self,
+        local_state: LocalAnchorState,
+        reference_gray: np.ndarray,
+        gray: np.ndarray,
+    ) -> Optional[TransformMatrix]:
+        if local_state.keyframe_points.size == 0:
+            return None
+
+        new_points, status, _ = cv2.calcOpticalFlowPyrLK(
+            reference_gray,
+            gray,
+            local_state.keyframe_points,
+            None,
+            winSize=(21, 21),
+            maxLevel=3,
+        )
+        if new_points is None or status is None:
+            return None
+
+        mask = status.reshape(-1) == 1
+        if mask.sum() < 4:
+            local_state.last_points = new_points[mask]
+            local_state.keyframe_points = local_state.keyframe_points[mask]
+            if mask.sum() == 0:
+                return None
+            return self._translation_transform(
+                local_state.keyframe_points, local_state.last_points
+            )
+
+        local_state.last_points = new_points[mask]
+        local_state.keyframe_points = local_state.keyframe_points[mask]
+
+        return self._estimate_transform(
+            local_state.keyframe_points.reshape(-1, 2),
+            local_state.last_points.reshape(-1, 2),
+            local_state.transform_type,
         )
 
     def _update_global_anchor(

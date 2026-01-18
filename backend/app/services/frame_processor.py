@@ -2,12 +2,24 @@ import cv2
 import numpy as np
 from typing import List, Dict, Tuple, Optional
 
-from ..models import AnnotationRecord, GeometryType, Point2D, TransformMatrix
+from ..models import (
+    AnnotationRecord,
+    DetectorType,
+    GeometryType,
+    Point2D,
+    TransformMatrix,
+    TransformPriority,
+)
 
 class FrameProcessor:
     """Service for processing video frames and detecting sharp features as anchor points."""
 
-    def __init__(self, max_features: int = 500, max_dimension: Optional[int] = None):
+    def __init__(
+        self,
+        max_features: int = 500,
+        max_dimension: Optional[int] = None,
+        detector_type: DetectorType = DetectorType.akaze,
+    ):
         """
         Initialize the frame processor.
         
@@ -17,12 +29,27 @@ class FrameProcessor:
         """
         self.max_features = max_features
         self.max_dimension = max_dimension
-        # Initialize ORB detector for fast binary feature detection.
-        self.detector = cv2.ORB_create(nfeatures=max_features)
+        self.detector_type = detector_type
+        self.detector = self._build_detector(detector_type)
+
+    def set_detector(self, detector_type: DetectorType) -> None:
+        if detector_type == self.detector_type:
+            return
+        self.detector_type = detector_type
+        self.detector = self._build_detector(detector_type)
+
+    def _build_detector(self, detector_type: DetectorType):
+        if detector_type == DetectorType.orb:
+            return cv2.ORB_create(nfeatures=self.max_features)
+        if detector_type == DetectorType.akaze:
+            return cv2.AKAZE_create()
+        if detector_type == DetectorType.sift:
+            return cv2.SIFT_create(nfeatures=self.max_features)
+        raise ValueError(f"Unsupported detector type: {detector_type}")
     
     def detect_anchor_points(self, frame: np.ndarray) -> Dict:
         """
-        Detect sharp features (anchor points) in a frame using ORB.
+        Detect sharp features (anchor points) in a frame using the configured detector.
         
         Args:
             frame: Input frame as numpy array
@@ -131,7 +158,10 @@ class FrameProcessor:
         return output_frame
 
     def draw_annotations(
-        self, frame: np.ndarray, annotations: List[AnnotationRecord]
+        self,
+        frame: np.ndarray,
+        annotations: List[AnnotationRecord],
+        transform_priority: TransformPriority = TransformPriority.global_first,
     ) -> np.ndarray:
         """
         Draw annotation geometries on the frame.
@@ -152,7 +182,10 @@ class FrameProcessor:
             if not points:
                 continue
 
-            transform = annotation.global_transform or annotation.local_transform
+            if transform_priority == TransformPriority.local_first:
+                transform = annotation.local_transform or annotation.global_transform
+            else:
+                transform = annotation.global_transform or annotation.local_transform
             coords = self._apply_transform(points, transform)
             if coords.size == 0:
                 continue

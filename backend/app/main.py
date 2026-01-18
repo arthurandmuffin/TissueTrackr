@@ -10,7 +10,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 import cv2
 import numpy as np
-from .models import AnnotationsIn, FramePinRequest
+from .models import AnnotationsIn, FramePinRequest, TrackingConfigUpdate
 from .services.anchor_manager import AnchorManager
 
 app = FastAPI(title="TissueTrackr Backend")
@@ -125,6 +125,7 @@ async def websocket_incoming_stream(websocket: WebSocket):
     except Exception as e:
         print(f"Incoming stream error: {str(e)}")
     finally:
+        anchor_manager.reset_tracking_state()
         await websocket.close()
 
 @app.websocket("/ws/outgoing-stream")
@@ -204,6 +205,18 @@ async def pin_frame(payload: FramePinRequest):
 async def unpin_frame(payload: FramePinRequest):
     anchor_manager.unpin_frame(payload.frame_id)
     return JSONResponse({"success": True, "frame_id": payload.frame_id})
+
+@app.get("/tracking/config")
+async def get_tracking_config():
+    return JSONResponse(jsonable_encoder(anchor_manager.get_tracking_config()))
+
+@app.post("/tracking/config")
+async def update_tracking_config(payload: TrackingConfigUpdate):
+    try:
+        updated = anchor_manager.update_tracking_config(payload)
+        return JSONResponse(jsonable_encoder(updated))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.delete("/annotations")
