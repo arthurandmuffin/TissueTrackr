@@ -129,3 +129,26 @@ class FrameState(BaseModel):
     timestamp: datetime
     landmarks: List[Landmark]
     annotations: List[AnnotationRecord] = Field(default_factory=list)
+    
+    
+"""
+Config tracking
+"""
+class TrackingConfig(BaseModel):
+    detector: DetectorType = DetectorType.sift
+    transform_priority: TransformPriority = TransformPriority.local_first
+    local_tracking_mode: LocalTrackingMode = LocalTrackingMode.annotation_transform
+    default_anchor_transform: TransformType = TransformType.similarity
+    map_transform: TransformType = TransformType.similarity
+    map_match_ratio: float = 0.85
+    map_min_inliers: int = 10
+
+
+class TrackingConfigUpdate(BaseModel):
+    detector: Optional[DetectorType] = None
+    transform_priority: Optional[TransformPriority] = None
+    local_tracking_mode: Optional[LocalTrackingMode] = None
+    default_anchor_transform: Optional[TransformType] = None
+    map_transform: Optional[TransformType] = None
+    map_match_ratio: Optional[float] = None
+    map_min_inliers: Optional[int] = None
