@@ -1,3 +1,5 @@
+![TissueTrackr Logo](./TissueTrackr.png)
+
 # TissueTrackr
 
 A PythonFastAPI backend exposes a websocket endpoint for a incoming video stream and a separate websocket endpoint for multiple viewing clients, while a React/Vite frontend is used to view and annotate the stream. The backend uses OpenCV to build a large reference-point map that supports tracking objects even when they move off screen, along with optical-flow-based local anchors.
